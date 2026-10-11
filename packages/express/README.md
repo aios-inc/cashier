@@ -1,6 +1,6 @@
 # @aios-medical/cashier-express
 
-[![npm](https://img.shields.io/npm/v/@aios-medical/cashier-express.svg)](https://www.npmjs.com/package/@aios-medical/cashier-express)
+[![npm](https://badgen.net/npm/v/@aios-medical/cashier-express)](https://www.npmjs.com/package/@aios-medical/cashier-express)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/fellahealth/cashier/blob/main/LICENSE)
 
 Express middleware and error handler for [Cashier](https://github.com/fellahealth/cashier), unified subscription billing for Node.js and TypeScript. Get a typed `req.cashier` on every request and answer billing errors with the right HTTP status. Supports Express 4 and 5.

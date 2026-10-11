@@ -1,6 +1,6 @@
 # Cashier
 
-[![npm](https://img.shields.io/npm/v/@aios-medical/cashier.svg)](https://www.npmjs.com/package/@aios-medical/cashier)
+[![npm](https://badgen.net/npm/v/@aios-medical/cashier)](https://www.npmjs.com/package/@aios-medical/cashier)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/fellahealth/cashier/blob/main/LICENSE)
 
 Unified subscription billing for Node.js and TypeScript. One API for every payment provider, with typed errors. Stripe and Recurly are supported today.

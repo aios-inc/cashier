@@ -1,6 +1,6 @@
 # @aios-medical/cashier-nestjs
 
-[![npm](https://img.shields.io/npm/v/@aios-medical/cashier-nestjs.svg)](https://www.npmjs.com/package/@aios-medical/cashier-nestjs)
+[![npm](https://badgen.net/npm/v/@aios-medical/cashier-nestjs)](https://www.npmjs.com/package/@aios-medical/cashier-nestjs)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/fellahealth/cashier/blob/main/LICENSE)
 
 NestJS module for [Cashier](https://github.com/fellahealth/cashier), unified subscription billing for Node.js and TypeScript. Register it with `forRoot` or `forRootAsync`, inject `CashierService` anywhere, and turn billing errors into proper HTTP responses. Supports NestJS 9, 10, 11 and 12.
