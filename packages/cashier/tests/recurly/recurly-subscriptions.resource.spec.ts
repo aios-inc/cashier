@@ -605,5 +605,41 @@ describe('RecurlySubscriptionsResource', () => {
       );
       expect(subscription.cancelAtPeriodEnd).toBe(true);
     });
+
+    it('should ignore an empty comment', async () => {
+      client.terminateSubscription.mockResolvedValue(
+        RECURLY_FIXTURES.EXPIRED_SUBSCRIPTION,
+      );
+
+      await subscriptions.cancel(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
+        comment: '',
+      });
+
+      expect(client.terminateSubscription).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        { params: { refund: 'none' } },
+      );
+    });
+
+    it.each([
+      ['immediately', {}],
+      ['at the end of the term', { atPeriodEnd: true }],
+    ])(
+      'should reject a comment %s without calling Recurly',
+      async (_case, params) => {
+        await expect(
+          subscriptions.cancel(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
+            ...params,
+            comment: 'cancelled by customer-42',
+          }),
+        ).rejects.toMatchObject({
+          constructor: UnsupportedOperationError,
+          provider: CashierProvider.Recurly,
+          message: 'Recurly cannot store a cancellation comment',
+        });
+        expect(client.terminateSubscription).not.toHaveBeenCalled();
+        expect(client.cancelSubscription).not.toHaveBeenCalled();
+      },
+    );
   });
 });

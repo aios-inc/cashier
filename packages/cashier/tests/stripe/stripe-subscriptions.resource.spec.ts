@@ -479,6 +479,11 @@ describe('StripeSubscriptionsResource', () => {
   });
 
   describe('cancel', () => {
+    const comment = JSON.stringify({
+      cancelledBy: 'customer-42',
+      reason: 'too_expensive',
+    });
+
     it('should cancel immediately by default', async () => {
       client.subscriptions.cancel.mockResolvedValue(
         STRIPE_FIXTURES.SUBSCRIPTION,
@@ -488,6 +493,20 @@ describe('StripeSubscriptionsResource', () => {
 
       expect(client.subscriptions.cancel).toHaveBeenCalledWith(
         STRIPE_FIXTURES.SUBSCRIPTION_ID,
+      );
+      expect(client.subscriptions.update).not.toHaveBeenCalled();
+    });
+
+    it('should cancel immediately with a comment', async () => {
+      client.subscriptions.cancel.mockResolvedValue(
+        STRIPE_FIXTURES.SUBSCRIPTION,
+      );
+
+      await subscriptions.cancel(STRIPE_FIXTURES.SUBSCRIPTION_ID, { comment });
+
+      expect(client.subscriptions.cancel).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        { cancellation_details: { comment } },
       );
       expect(client.subscriptions.update).not.toHaveBeenCalled();
     });
@@ -507,5 +526,87 @@ describe('StripeSubscriptionsResource', () => {
       );
       expect(client.subscriptions.cancel).not.toHaveBeenCalled();
     });
+
+    it('should schedule the cancellation at period end with a comment', async () => {
+      client.subscriptions.update.mockResolvedValue(
+        STRIPE_FIXTURES.SUBSCRIPTION,
+      );
+
+      await subscriptions.cancel(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+        atPeriodEnd: true,
+        comment,
+      });
+
+      expect(client.subscriptions.update).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        { cancel_at_period_end: true, cancellation_details: { comment } },
+      );
+      expect(client.subscriptions.cancel).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['no comment', {}],
+      ['an empty comment', { comment: '' }],
+    ])(
+      'should not send cancellation_details with %s',
+      async (_case, params) => {
+        client.subscriptions.cancel.mockResolvedValue(
+          STRIPE_FIXTURES.SUBSCRIPTION,
+        );
+        client.subscriptions.update.mockResolvedValue(
+          STRIPE_FIXTURES.SUBSCRIPTION,
+        );
+
+        await subscriptions.cancel(STRIPE_FIXTURES.SUBSCRIPTION_ID, params);
+        await subscriptions.cancel(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+          ...params,
+          atPeriodEnd: true,
+        });
+
+        expect(client.subscriptions.cancel).toHaveBeenCalledWith(
+          STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        );
+        expect(client.subscriptions.update).toHaveBeenCalledWith(
+          STRIPE_FIXTURES.SUBSCRIPTION_ID,
+          { cancel_at_period_end: true },
+        );
+      },
+    );
+
+    it('should accept a comment of 5000 characters', async () => {
+      client.subscriptions.cancel.mockResolvedValue(
+        STRIPE_FIXTURES.SUBSCRIPTION,
+      );
+
+      await subscriptions.cancel(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+        comment: 'a'.repeat(5000),
+      });
+
+      expect(client.subscriptions.cancel).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        { cancellation_details: { comment: 'a'.repeat(5000) } },
+      );
+    });
+
+    it.each([
+      ['immediately', {}],
+      ['at period end', { atPeriodEnd: true }],
+    ])(
+      'should reject a comment longer than 5000 characters %s without calling Stripe',
+      async (_case, params) => {
+        await expect(
+          subscriptions.cancel(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+            ...params,
+            comment: 'a'.repeat(5001),
+          }),
+        ).rejects.toMatchObject({
+          constructor: ValidationError,
+          provider: CashierProvider.Stripe,
+          message: 'The cancellation comment must be at most 5000 characters',
+        });
+        expect(client.subscriptions.cancel).not.toHaveBeenCalled();
+        expect(client.subscriptions.update).not.toHaveBeenCalled();
+      },
+    );
   });
 });

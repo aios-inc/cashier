@@ -16,6 +16,7 @@ import {
 import { CursorPaginator } from '../../../types/pagination.types';
 import {
   DEFAULT_LIST_LIMIT,
+  STRIPE_MAX_CANCELLATION_COMMENT_LENGTH,
   STRIPE_SUBSCRIPTION_RELATIONS,
   STRIPE_SUBSCRIPTION_STATUS_FILTERS,
 } from '../../../constants/cashier.constants';
@@ -135,17 +136,38 @@ export class StripeSubscriptionsResource implements SubscriptionsResource<Cashie
 
   cancel(
     subscriptionId: string,
-    { atPeriodEnd = false }: CancelSubscriptionParams = {},
+    { atPeriodEnd = false, comment }: CancelSubscriptionParams = {},
   ): Promise<Subscription> {
-    return stripeRequest(async () =>
-      mapStripeSubscription(
-        atPeriodEnd
-          ? await this.client.subscriptions.update(subscriptionId, {
-              cancel_at_period_end: true,
-            })
+    return stripeRequest(async () => {
+      if (comment && comment.length > STRIPE_MAX_CANCELLATION_COMMENT_LENGTH) {
+        throw new ValidationError(
+          `The cancellation comment must be at most ${STRIPE_MAX_CANCELLATION_COMMENT_LENGTH} characters`,
+          { provider: CashierProvider.Stripe },
+        );
+      }
+
+      const cancellationDetails = comment
+        ? { cancellation_details: { comment } }
+        : undefined;
+
+      if (atPeriodEnd) {
+        return mapStripeSubscription(
+          await this.client.subscriptions.update(subscriptionId, {
+            cancel_at_period_end: true,
+            ...cancellationDetails,
+          }),
+        );
+      }
+
+      return mapStripeSubscription(
+        cancellationDetails
+          ? await this.client.subscriptions.cancel(
+              subscriptionId,
+              cancellationDetails,
+            )
           : await this.client.subscriptions.cancel(subscriptionId),
-      ),
-    );
+      );
+    });
   }
 
   private fetch<Relation extends StripeSubscriptionRelation>(
