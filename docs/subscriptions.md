@@ -187,14 +187,23 @@ await driver.subscriptions.cancel('sub_123');
 await driver.subscriptions.cancel('sub_123', { atPeriodEnd: true });
 ```
 
-| Parameter     | Type      | Description                                                                     |
-| ------------- | --------- | ------------------------------------------------------------------------------- |
-| `atPeriodEnd` | `boolean` | Keep the subscription running until the end of the period. Defaults to `false`. |
+Pass `comment` to record why and by whom the subscription was cancelled. Cashier stores it unchanged and does not parse it, so it can hold JSON:
 
-| Provider | Default                                  | `atPeriodEnd: true`                       |
-| -------- | ---------------------------------------- | ----------------------------------------- |
-| Stripe   | Cancels right away.                      | Cancels at the end of the current period. |
-| Recurly  | Terminates right away, without a refund. | Cancels at the end of the current term.   |
+```ts
+await driver.subscriptions.cancel('sub_123', {
+  comment: JSON.stringify({ cancelledBy: 'customer-42', reason: 'moving' }),
+});
+```
+
+| Parameter     | Type      | Description                                                                            |
+| ------------- | --------- | -------------------------------------------------------------------------------------- |
+| `atPeriodEnd` | `boolean` | Keep the subscription running until the end of the period. Defaults to `false`.        |
+| `comment`     | `string`  | Free text stored with the cancellation. An empty string is the same as leaving it out. |
+
+| Provider | Default                                  | `atPeriodEnd: true`                       | `comment`                                                                                                                                                                        |
+| -------- | ---------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stripe   | Cancels right away.                      | Cancels at the end of the current period. | Stored as `cancellation_details.comment`, with either cancel. Stripe accepts at most 5000 characters, so a longer comment rejects with `ValidationError` before any request.     |
+| Recurly  | Terminates right away, without a refund. | Cancels at the end of the current term.   | Recurly has no internal note on a cancel or terminate, and `customerNotes` is visible to the customer, so a comment rejects with `UnsupportedOperationError` before any request. |
 
 ## The `Subscription` object
 

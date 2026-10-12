@@ -14,6 +14,8 @@ export const RECURLY_MAX_LIST_LIMIT = 200;
 
 export const DRIVER_CACHE_SIZE = 100;
 
+export const STRIPE_MAX_CANCELLATION_COMMENT_LENGTH = 5000;
+
 export const STRIPE_PAYMENT_RELATION_EXPAND: Record<
   CashierPaymentRelations['stripe'],
   string[]

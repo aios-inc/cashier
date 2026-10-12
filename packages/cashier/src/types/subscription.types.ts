@@ -120,6 +120,7 @@ export interface UpdateSubscriptionParams {
 
 export interface CancelSubscriptionParams {
   atPeriodEnd?: boolean;
+  comment?: string;
 }
 
 export interface SubscriptionsResource<

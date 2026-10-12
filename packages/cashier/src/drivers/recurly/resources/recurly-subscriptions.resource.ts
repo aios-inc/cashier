@@ -18,6 +18,7 @@ import {
   RECURLY_SUBSCRIPTION_RELATIONS,
   RECURLY_SUBSCRIPTION_STATE_FILTERS,
 } from '../../../constants/cashier.constants';
+import { UnsupportedOperationError } from '../../../errors/unsupported-operation.error';
 import { resolveRelations } from '../../../utils/relations.utils';
 import {
   mapRecurlySubscription,
@@ -160,10 +161,17 @@ export class RecurlySubscriptionsResource implements SubscriptionsResource<Cashi
 
   cancel(
     subscriptionId: string,
-    { atPeriodEnd = false }: CancelSubscriptionParams = {},
+    { atPeriodEnd = false, comment }: CancelSubscriptionParams = {},
   ): Promise<Subscription> {
-    return recurlyRequest(async () =>
-      mapRecurlySubscription(
+    return recurlyRequest(async () => {
+      if (comment) {
+        throw new UnsupportedOperationError(
+          'Recurly cannot store a cancellation comment',
+          { provider: CashierProvider.Recurly },
+        );
+      }
+
+      return mapRecurlySubscription(
         atPeriodEnd
           ? await this.client.cancelSubscription(subscriptionId, {
               params: { timeframe: 'term_end' },
@@ -171,8 +179,8 @@ export class RecurlySubscriptionsResource implements SubscriptionsResource<Cashi
           : await this.client.terminateSubscription(subscriptionId, {
               params: { refund: 'none' },
             }),
-      ),
-    );
+      );
+    });
   }
 
   private subscriptions(
