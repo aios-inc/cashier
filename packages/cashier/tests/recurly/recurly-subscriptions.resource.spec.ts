@@ -1,6 +1,7 @@
 import { RecurlySubscriptionsResource } from '../../src/drivers/recurly/resources/recurly-subscriptions.resource';
 import { ProviderError } from '../../src/errors/provider.error';
 import { UnsupportedOperationError } from '../../src/errors/unsupported-operation.error';
+import { ValidationError } from '../../src/errors/validation.error';
 import { CashierProvider } from '../../src/types/cashier.types';
 import {
   RECURLY_FIXTURES,
@@ -221,6 +222,62 @@ describe('RecurlySubscriptionsResource', () => {
         hasMorePages: true,
         nextCursor: RECURLY_FIXTURES.CURSOR,
       });
+    });
+  });
+
+  describe('cursorPaginate by price', () => {
+    it('should list the site subscriptions and keep those on the plan', async () => {
+      client.listSubscriptions.mockReturnValue(
+        createRecurlyPagePager(
+          [
+            RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+            RECURLY_FIXTURES.PAUSED_DISCOUNTED_SUBSCRIPTION,
+          ],
+          RECURLY_FIXTURES.NEXT_PATH,
+        ),
+      );
+
+      const page = await subscriptions.cursorPaginate({
+        price: 'plan_1',
+        perPage: 2,
+      });
+
+      expect(client.listSubscriptions).toHaveBeenCalledWith({
+        params: { limit: 2 },
+      });
+      expect(client.listAccountSubscriptions).not.toHaveBeenCalled();
+      expect(page).toEqual({
+        data: [RECURLY_FIXTURES.EXPECTED_ACTIVE_SUBSCRIPTION],
+        perPage: 2,
+        hasMorePages: true,
+        nextCursor: RECURLY_FIXTURES.CURSOR,
+      });
+    });
+
+    it('should match a plan code and filter an account by price', async () => {
+      client.listAccountSubscriptions.mockReturnValue(
+        createRecurlyPagePager([
+          RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+          RECURLY_FIXTURES.PAUSED_DISCOUNTED_SUBSCRIPTION,
+        ]),
+      );
+
+      const page = await subscriptions.cursorPaginate({
+        customer: RECURLY_FIXTURES.ACCOUNT_ID,
+        price: 'code-pro-legacy',
+      });
+
+      expect(page.data.map((subscription) => subscription.id)).toEqual([
+        'rec_sub_2',
+      ]);
+    });
+
+    it('should reject without a customer or a price', async () => {
+      await expect(
+        // @ts-expect-error a customer or a price is required
+        subscriptions.cursorPaginate({}),
+      ).rejects.toBeInstanceOf(ValidationError);
+      expect(client.listSubscriptions).not.toHaveBeenCalled();
     });
   });
 

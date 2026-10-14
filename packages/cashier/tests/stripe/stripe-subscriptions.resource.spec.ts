@@ -176,6 +176,56 @@ describe('StripeSubscriptionsResource', () => {
     });
   });
 
+  describe('cursorPaginate by price', () => {
+    it('should pass the price to Stripe without a customer', async () => {
+      client.subscriptions.list.mockResolvedValue({
+        data: [STRIPE_FIXTURES.SUBSCRIPTION],
+        has_more: false,
+      });
+
+      await subscriptions.cursorPaginate({
+        price: 'price_123',
+        status: 'active',
+        perPage: 10,
+      });
+
+      expect(client.subscriptions.list).toHaveBeenCalledWith({
+        price: 'price_123',
+        limit: 10,
+        status: 'active',
+      });
+    });
+
+    it('should pass both the customer and the price', async () => {
+      client.subscriptions.list.mockResolvedValue({
+        data: [],
+        has_more: false,
+      });
+
+      await subscriptions.cursorPaginate({
+        customer: STRIPE_FIXTURES.CUSTOMER_ID,
+        price: 'price_123',
+        cursor: 'sub_000',
+      });
+
+      expect(client.subscriptions.list).toHaveBeenCalledWith({
+        customer: STRIPE_FIXTURES.CUSTOMER_ID,
+        price: 'price_123',
+        limit: 100,
+        starting_after: 'sub_000',
+        status: 'all',
+      });
+    });
+
+    it('should reject without a customer or a price', async () => {
+      await expect(
+        // @ts-expect-error a customer or a price is required
+        subscriptions.cursorPaginate({}),
+      ).rejects.toBeInstanceOf(ValidationError);
+      expect(client.subscriptions.list).not.toHaveBeenCalled();
+    });
+  });
+
   describe('cancelAt', () => {
     it.each([
       [

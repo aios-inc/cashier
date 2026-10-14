@@ -4,6 +4,7 @@
 
 - [`subscriptions.list(params)`](#subscriptionslistparams)
 - [`subscriptions.cursorPaginate(params)`](#subscriptionscursorpaginateparams)
+- [Filtering by price](#filtering-by-price)
 - [Filtering by status](#filtering-by-status)
 - [Loading relations with `with`](#loading-relations-with-with)
 - [`subscriptions.create(params)`](#subscriptionscreateparams)
@@ -34,7 +35,7 @@ const subscriptions = await driver.subscriptions.list({ customer: 'cus_123' });
 
 ## `subscriptions.cursorPaginate(params)`
 
-Returns one page of a customer's subscriptions, newest first, with a cursor for the next page.
+Returns one page of a customer's subscriptions, or of every subscription on a price, newest first, with a cursor for the next page.
 
 ```ts
 const subscriptions = await driver.subscriptions.cursorPaginate({
@@ -51,7 +52,8 @@ const nextSubscriptions = await driver.subscriptions.cursorPaginate({
 
 | Parameter  | Type                          | Description                                                                         |
 | ---------- | ----------------------------- | ----------------------------------------------------------------------------------- |
-| `customer` | `string`                      | Required. The customer id.                                                          |
+| `customer` | `string`                      | The customer id. Required unless `price` is given.                                  |
+| `price`    | `string`                      | Only return subscriptions on this price. Required unless `customer` is given.       |
 | `status`   | `SubscriptionStatus \| 'all'` | Only return subscriptions with this status. Defaults to `'all'`.                    |
 | `perPage`  | `number`                      | Number of subscriptions per page. Defaults to `100`.                                |
 | `cursor`   | `string \| null`              | The `nextCursor` of the previous page. Leave it out, or pass `null`, for the first. |
@@ -63,6 +65,23 @@ It returns a `CursorPaginator<Subscription>`. See [Pagination and limits](driver
 | -------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | Stripe   | Lists the customer's subscriptions after the cursor, which is the id of the last subscription. The maximum `perPage` is 100. |
 | Recurly  | Lists the account's subscriptions with Recurly's own cursor. The maximum `perPage` is 200.                                   |
+
+## Filtering by price
+
+Pass `price` to `cursorPaginate` to list the subscriptions on a price. Without `customer`, it lists them across every customer. With both, only that customer's. Leaving out both rejects with `ValidationError` before any request is made.
+
+```ts
+const subscriptions = await driver.subscriptions.cursorPaginate({
+  price: 'price_123',
+  status: 'active',
+  perPage: 25,
+});
+```
+
+| Provider | Behavior                                                                                                                                                                                                                                                                                                                                         |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Stripe   | Passes `price` to `subscriptions.list`, which filters on Stripe's side.                                                                                                                                                                                                                                                                          |
+| Recurly  | Recurly cannot filter subscriptions by plan, so Cashier reads the site's subscriptions, or the account's, and keeps those on the plan. `price` is a plan id, or `code-` followed by a plan code. A page can hold fewer than `perPage` subscriptions, or none, while `hasMorePages` is still `true`. Keep paging until `hasMorePages` is `false`. |
 
 ## Filtering by status
 

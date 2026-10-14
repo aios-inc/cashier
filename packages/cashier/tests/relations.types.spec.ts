@@ -89,6 +89,11 @@ const checkSubscriptionRelations = async (cashier: Cashier) => {
   // @ts-expect-error discounts were not loaded
   void page.data[0]?.discount;
 
+  await cashier.use().subscriptions.cursorPaginate({ price: 'price_123' });
+
+  // @ts-expect-error a customer or a price is required
+  await cashier.use().subscriptions.cursorPaginate({ status: 'all' });
+
   await cashier.use(CashierProvider.Recurly).subscriptions.list({
     customer: 'code-customer-42',
     // @ts-expect-error refunds is not a subscription relation

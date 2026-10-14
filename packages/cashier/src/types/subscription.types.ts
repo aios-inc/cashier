@@ -94,12 +94,16 @@ export interface ListSubscriptionsParams<
   limit?: number;
 }
 
-export interface CursorPaginateSubscriptionsParams<
+export type SubscriptionScope =
+  { customer: string; price?: string } | { customer?: string; price: string };
+
+export type CursorPaginateSubscriptionsParams<
   Relation extends SubscriptionRelation = never,
->
-  extends CursorPaginateParams, WithParams<Relation> {
-  status?: SubscriptionStatusFilter;
-}
+> = Omit<CursorPaginateParams, 'customer'> &
+  WithParams<Relation> &
+  SubscriptionScope & {
+    status?: SubscriptionStatusFilter;
+  };
 
 export interface CreateSubscriptionParams {
   customer: string;
