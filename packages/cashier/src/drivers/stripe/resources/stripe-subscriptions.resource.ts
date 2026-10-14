@@ -53,8 +53,9 @@ export class StripeSubscriptionsResource implements SubscriptionsResource<Cashie
     ).data;
   }
 
-  cursorPaginate<Relation extends StripeSubscriptionRelation = never>({
+  async cursorPaginate<Relation extends StripeSubscriptionRelation = never>({
     customer,
+    price,
     status = 'all',
     perPage = DEFAULT_LIST_LIMIT,
     cursor,
@@ -62,9 +63,17 @@ export class StripeSubscriptionsResource implements SubscriptionsResource<Cashie
   }: CursorPaginateSubscriptionsParams<Relation>): Promise<
     CursorPaginator<SubscriptionWith<Relation>>
   > {
+    if (!customer && !price) {
+      throw new ValidationError(
+        'Listing subscriptions requires a customer or a price',
+        { provider: CashierProvider.Stripe },
+      );
+    }
+
     return this.fetch<Relation>(
       {
-        customer,
+        ...(customer ? { customer } : {}),
+        ...(price ? { price } : {}),
         limit: perPage,
         ...(cursor ? { starting_after: cursor } : {}),
       },

@@ -19,13 +19,17 @@ import {
   RECURLY_SUBSCRIPTION_STATE_FILTERS,
 } from '../../../constants/cashier.constants';
 import { UnsupportedOperationError } from '../../../errors/unsupported-operation.error';
+import { ValidationError } from '../../../errors/validation.error';
 import { resolveRelations } from '../../../utils/relations.utils';
 import {
   mapRecurlySubscription,
   mapRecurlySubscriptionStatus,
   toRecurlyCustomFields,
 } from '../mappers/recurly-subscription.mapper';
-import { toRecurlyPlanReference } from '../recurly-plan-reference';
+import {
+  RECURLY_CODE_PREFIX,
+  toRecurlyPlanReference,
+} from '../recurly-plan-reference';
 import { readRecurlyItems, readRecurlyPage } from '../recurly-page';
 import { recurlyRequest } from '../recurly-request';
 
@@ -47,6 +51,14 @@ const hasStatus =
   (subscription: recurly.Subscription): boolean =>
     status === 'all' ||
     mapRecurlySubscriptionStatus(subscription.state) === status;
+
+const hasPrice =
+  (price?: string) =>
+  (subscription: recurly.Subscription): boolean =>
+    !price ||
+    (price.startsWith(RECURLY_CODE_PREFIX)
+      ? subscription.plan?.code === price.slice(RECURLY_CODE_PREFIX.length)
+      : subscription.plan?.id === price);
 
 export class RecurlySubscriptionsResource implements SubscriptionsResource<CashierProvider.Recurly> {
   constructor(private readonly client: recurly.Client) {}
@@ -73,6 +85,7 @@ export class RecurlySubscriptionsResource implements SubscriptionsResource<Cashi
 
   cursorPaginate<Relation extends RecurlySubscriptionRelation = never>({
     customer,
+    price,
     status = 'all',
     perPage = DEFAULT_LIST_LIMIT,
     cursor,
@@ -81,6 +94,13 @@ export class RecurlySubscriptionsResource implements SubscriptionsResource<Cashi
     CursorPaginator<SubscriptionWith<Relation>>
   > {
     return recurlyRequest(async () => {
+      if (!customer && !price) {
+        throw new ValidationError(
+          'Listing subscriptions requires a customer or a price',
+          { provider: CashierProvider.Recurly },
+        );
+      }
+
       const relations = resolveSubscriptionRelations(requested);
       const page = await readRecurlyPage(
         this.subscriptions(customer, perPage, status, cursor),
@@ -88,7 +108,7 @@ export class RecurlySubscriptionsResource implements SubscriptionsResource<Cashi
 
       return {
         data: await this.map<Relation>(
-          page.items.filter(hasStatus(status)),
+          page.items.filter(hasStatus(status)).filter(hasPrice(price)),
           relations,
         ),
         perPage,
@@ -184,7 +204,7 @@ export class RecurlySubscriptionsResource implements SubscriptionsResource<Cashi
   }
 
   private subscriptions(
-    customer: string,
+    customer: string | undefined,
     limit: number,
     status: SubscriptionStatusFilter,
     cursor?: string | null,
@@ -192,13 +212,17 @@ export class RecurlySubscriptionsResource implements SubscriptionsResource<Cashi
     const state =
       status === 'all' ? undefined : RECURLY_SUBSCRIPTION_STATE_FILTERS[status];
 
-    return this.client.listAccountSubscriptions(customer, {
+    const options = {
       params: {
         limit,
         ...(state ? { state } : {}),
         ...(cursor ? { cursor } : {}),
       },
-    });
+    };
+
+    return customer
+      ? this.client.listAccountSubscriptions(customer, options)
+      : this.client.listSubscriptions(options);
   }
 
   private async map<Relation extends RecurlySubscriptionRelation>(
