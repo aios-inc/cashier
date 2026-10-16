@@ -1,6 +1,7 @@
 import * as recurly from 'recurly';
 import { RecurlyInvoicesResource } from '../../src/drivers/recurly/resources/recurly-invoices.resource';
 import { NotFoundError } from '../../src/errors/not-found.error';
+import { PaymentFailedError } from '../../src/errors/payment-failed.error';
 import { ProviderError } from '../../src/errors/provider.error';
 import { UnsupportedOperationError } from '../../src/errors/unsupported-operation.error';
 import {
@@ -16,6 +17,7 @@ import {
   createRecurlyClientMock,
 } from '../fixtures/recurly-client.mock';
 import { CashierProvider } from '../../src/types/cashier.types';
+import { CreateInvoiceParams } from '../../src/types/invoice.types';
 
 describe('RecurlyInvoicesResource', () => {
   let client: RecurlyClientMock;
@@ -304,6 +306,231 @@ describe('RecurlyInvoicesResource', () => {
         RECURLY_FIXTURES.INVOICE_ID,
       );
       expect(invoice).toEqual(RECURLY_FIXTURES.EXPECTED_INVOICES[0]);
+    });
+  });
+  describe('create', () => {
+    const NOW = new Date('2026-01-01T12:00:00Z');
+    const BASE_PARAMS: CreateInvoiceParams = {
+      customer: RECURLY_FIXTURES.ACCOUNT_ID,
+      currency: 'usd',
+      lineItems: [
+        { description: 'Consultation', amount: 1999 },
+        { description: '', amount: 500 },
+      ],
+      collection: 'send_invoice',
+      description: 'Clinic visit',
+    };
+
+    beforeEach(() => {
+      jest.useFakeTimers({ now: NOW });
+      client.getAccount.mockResolvedValue(RECURLY_FIXTURES.ACCOUNT);
+      client.createPurchase.mockResolvedValue({
+        chargeInvoice: RECURLY_FIXTURES.PAID_INVOICE,
+        creditInvoices: [],
+      });
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('should make one purchase with the line items in major units', async () => {
+      const invoice = await invoices.create(BASE_PARAMS);
+
+      expect(client.getAccount).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.ACCOUNT_ID,
+      );
+      expect(client.createPurchase).toHaveBeenCalledTimes(1);
+      expect(client.createPurchase).toHaveBeenCalledWith({
+        currency: 'USD',
+        account: { code: RECURLY_FIXTURES.ACCOUNT_CODE },
+        collectionMethod: 'manual',
+        netTerms: 30,
+        netTermsType: 'net',
+        customerNotes: 'Clinic visit',
+        lineItems: [
+          {
+            currency: 'USD',
+            unitAmount: 19.99,
+            type: 'charge',
+            description: 'Consultation',
+          },
+          {
+            currency: 'USD',
+            unitAmount: 5,
+            type: 'charge',
+            description: 'Clinic visit',
+          },
+        ],
+      });
+      expect(invoice).toEqual(RECURLY_FIXTURES.EXPECTED_INVOICES[0]);
+    });
+
+    it('should keep zero-decimal amounts unchanged', async () => {
+      client.createPurchase.mockResolvedValue({
+        chargeInvoice: RECURLY_FIXTURES.ZERO_DECIMAL_INVOICE,
+      });
+
+      const invoice = await invoices.create({
+        ...BASE_PARAMS,
+        currency: 'JPY',
+        lineItems: [{ description: 'Consultation', amount: 5000 }],
+      });
+
+      expect(client.createPurchase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lineItems: [expect.objectContaining({ unitAmount: 5000 })],
+        }),
+      );
+      expect(invoice.total).toBe(5000);
+    });
+
+    it.each([
+      [
+        'collects automatically with the billing info',
+        {
+          collection: 'charge_automatically',
+          chargeNow: true,
+          paymentMethod: RECURLY_FIXTURES.BILLING_INFO_ID,
+        },
+        {
+          collectionMethod: 'automatic',
+          billingInfoId: RECURLY_FIXTURES.BILLING_INFO_ID,
+        },
+      ],
+      [
+        'collects automatically with the default billing info',
+        { collection: 'charge_automatically' },
+        { collectionMethod: 'automatic' },
+      ],
+      [
+        'sends the invoice with days until due',
+        {
+          collection: 'send_invoice',
+          daysUntilDue: 14,
+          paymentMethod: RECURLY_FIXTURES.BILLING_INFO_ID,
+        },
+        { collectionMethod: 'manual', netTerms: 14, netTermsType: 'net' },
+      ],
+      [
+        'sends the invoice with a due date, rounding up to whole days',
+        {
+          collection: 'send_invoice',
+          dueDate: new Date('2026-01-15T00:00:00Z'),
+        },
+        { collectionMethod: 'manual', netTerms: 14, netTermsType: 'net' },
+      ],
+      [
+        'sends the invoice with a due date on an exact day',
+        {
+          collection: 'send_invoice',
+          dueDate: new Date('2026-01-08T12:00:00Z'),
+        },
+        { collectionMethod: 'manual', netTerms: 7, netTermsType: 'net' },
+      ],
+    ] as const)(
+      'should map the collection when it %s',
+      async (_case, overrides, expected) => {
+        await invoices.create({ ...BASE_PARAMS, ...overrides });
+
+        const [purchase] = client.createPurchase.mock.calls[0];
+
+        expect(purchase).toMatchObject(expected);
+
+        for (const key of ['billingInfoId', 'netTerms', 'netTermsType']) {
+          if (!(key in expected)) expect(purchase).not.toHaveProperty(key);
+        }
+      },
+    );
+
+    it('should add the metadata to every line item as custom fields', async () => {
+      await invoices.create({
+        ...BASE_PARAMS,
+        metadata: { order: 'order-42' },
+      });
+
+      const [purchase] = client.createPurchase.mock.calls[0];
+
+      expect(
+        purchase.lineItems.map(
+          (lineItem: recurly.LineItemCreate) => lineItem.customFields,
+        ),
+      ).toEqual([
+        [{ name: 'order', value: 'order-42' }],
+        [{ name: 'order', value: 'order-42' }],
+      ]);
+    });
+
+    it('should pass the idempotency key as a request header', async () => {
+      await invoices.create({ ...BASE_PARAMS, idempotencyKey: 'order-42' });
+
+      expect(client.createPurchase).toHaveBeenCalledWith(expect.any(Object), {
+        headers: { 'Idempotency-Key': 'order-42' },
+      });
+    });
+
+    it('should reject payment method types without calling Recurly', async () => {
+      await expect(
+        invoices.create({ ...BASE_PARAMS, paymentMethodTypes: ['card'] }),
+      ).rejects.toMatchObject({
+        constructor: UnsupportedOperationError,
+        provider: CashierProvider.Recurly,
+      });
+      expect(client.getAccount).not.toHaveBeenCalled();
+      expect(client.createPurchase).not.toHaveBeenCalled();
+    });
+
+    it('should throw PaymentFailedError when the transaction is declined', async () => {
+      client.createPurchase.mockRejectedValue(
+        withRecurlyStatus(
+          new recurly.errors.TransactionError(
+            'Transaction declined',
+            'transaction',
+            {
+              transactionError: {
+                code: 'declined',
+                declineCode: 'do_not_honor',
+              },
+            },
+          ),
+          422,
+        ),
+      );
+
+      await expect(
+        invoices.create({ ...BASE_PARAMS, collection: 'charge_automatically' }),
+      ).rejects.toMatchObject({
+        constructor: PaymentFailedError,
+        provider: CashierProvider.Recurly,
+        providerCode: 'declined',
+        declineCode: 'do_not_honor',
+      });
+    });
+
+    it('should throw NotFoundError when the account does not exist', async () => {
+      client.getAccount.mockRejectedValue(
+        withRecurlyStatus(
+          new recurly.errors.NotFoundError(
+            "Couldn't find Account",
+            'not_found',
+            {},
+          ),
+          404,
+        ),
+      );
+
+      await expect(invoices.create(BASE_PARAMS)).rejects.toBeInstanceOf(
+        NotFoundError,
+      );
+      expect(client.createPurchase).not.toHaveBeenCalled();
+    });
+
+    it('should throw ProviderError when Recurly returns no charge invoice', async () => {
+      client.createPurchase.mockResolvedValue({ chargeInvoice: null });
+
+      await expect(invoices.create(BASE_PARAMS)).rejects.toBeInstanceOf(
+        ProviderError,
+      );
     });
   });
 });

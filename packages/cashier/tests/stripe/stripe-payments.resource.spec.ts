@@ -1,6 +1,7 @@
 import Stripe from 'stripe';
 import { StripePaymentsResource } from '../../src/drivers/stripe/resources/stripe-payments.resource';
 import { NotFoundError } from '../../src/errors/not-found.error';
+import { PaymentFailedError } from '../../src/errors/payment-failed.error';
 import { UnsupportedOperationError } from '../../src/errors/unsupported-operation.error';
 import { ValidationError } from '../../src/errors/validation.error';
 import { STRIPE_FIXTURES } from '../fixtures/stripe.fixtures';
@@ -354,6 +355,90 @@ describe('StripePaymentsResource', () => {
 
       expect(payment?.subscription).toBeNull();
       expect(payment?.invoiceId).toBe(STRIPE_FIXTURES.INVOICE_ID);
+    });
+  });
+
+  describe('create', () => {
+    const PARAMS = {
+      customer: STRIPE_FIXTURES.CUSTOMER_ID,
+      currency: 'EUR',
+      amount: 12900,
+      paymentMethod: STRIPE_FIXTURES.PAYMENT_METHOD_ID,
+      description: 'Wegovy 0.5mg',
+      metadata: { order: 'order-42' },
+    };
+
+    beforeEach(() => {
+      client.paymentIntents.create.mockResolvedValue(
+        STRIPE_FIXTURES.SUCCEEDED_PAYMENT_INTENT,
+      );
+    });
+
+    it('should confirm an off-session payment intent limited to card and link', async () => {
+      await payments.create(PARAMS);
+
+      expect(client.paymentIntents.create).toHaveBeenCalledWith({
+        amount: 12900,
+        currency: 'eur',
+        customer: STRIPE_FIXTURES.CUSTOMER_ID,
+        payment_method: STRIPE_FIXTURES.PAYMENT_METHOD_ID,
+        payment_method_types: ['card', 'link'],
+        confirm: true,
+        off_session: true,
+        description: 'Wegovy 0.5mg',
+        metadata: { order: 'order-42' },
+      });
+    });
+
+    it('should pass the idempotency key as is', async () => {
+      await payments.create({ ...PARAMS, idempotencyKey: 'order-42' });
+
+      expect(client.paymentIntents.create).toHaveBeenCalledWith(
+        expect.any(Object),
+        { idempotencyKey: 'order-42' },
+      );
+    });
+
+    it('should return a payment whose id can be refunded', async () => {
+      client.refunds.create.mockResolvedValue(STRIPE_FIXTURES.REFUND);
+
+      const payment = await payments.create(PARAMS);
+      await payments.refund(payment.id);
+
+      expect(payment).toEqual(STRIPE_FIXTURES.EXPECTED_PAYMENTS[0]);
+      expect(client.refunds.create).toHaveBeenCalledWith({
+        payment_intent: 'pi_123',
+      });
+    });
+
+    it('should return an incomplete payment when it requires action', async () => {
+      client.paymentIntents.create.mockResolvedValue(
+        STRIPE_FIXTURES.PAYMENT_INTENTS[2],
+      );
+
+      const payment = await payments.create(PARAMS);
+
+      expect(payment.status).toBe('incomplete');
+    });
+
+    it('should throw PaymentFailedError when the card is declined', async () => {
+      client.paymentIntents.create.mockRejectedValue(
+        new Stripe.errors.StripeCardError({
+          type: 'card_error',
+          code: 'card_declined',
+          decline_code: 'insufficient_funds',
+          message: 'Your card was declined.',
+          statusCode: 402,
+        } as Stripe.StripeRawError),
+      );
+
+      await expect(payments.create(PARAMS)).rejects.toMatchObject({
+        constructor: PaymentFailedError,
+        provider: CashierProvider.Stripe,
+        providerStatus: 402,
+        providerCode: 'card_declined',
+        declineCode: 'insufficient_funds',
+      });
     });
   });
 

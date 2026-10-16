@@ -1,8 +1,10 @@
 import * as recurly from 'recurly';
 import { CashierProvider } from '../../../types/cashier.types';
 import {
+  CreatePaymentParams,
   CursorPaginatePaymentsParams,
   ListPaymentsParams,
+  Payment,
   PaymentWith,
   PaymentsResource,
   ProviderPaymentRelation,
@@ -15,7 +17,9 @@ import {
   RECURLY_MAX_LIST_LIMIT,
   RECURLY_PAYMENT_RELATIONS,
 } from '../../../constants/cashier.constants';
+import { ProviderError } from '../../../errors/provider.error';
 import { ValidationError } from '../../../errors/validation.error';
+import { validateCreatePaymentParams } from '../../../utils/create-params.utils';
 import { resolveRelations } from '../../../utils/relations.utils';
 import { toMajorUnits } from '../../../utils/money.utils';
 import {
@@ -24,6 +28,10 @@ import {
 } from '../mappers/recurly-payment.mapper';
 import { mapRecurlyRefund } from '../mappers/recurly-refund.mapper';
 import { readRecurlyItems, readRecurlyPage } from '../recurly-page';
+import {
+  createRecurlyPurchase,
+  toRecurlyPurchaseLineItem,
+} from '../recurly-purchase';
 import { recurlyRequest } from '../recurly-request';
 
 type RecurlyPaymentRelation = ProviderPaymentRelation<CashierProvider.Recurly>;
@@ -86,6 +94,52 @@ export class RecurlyPaymentsResource implements PaymentsResource<CashierProvider
         hasMorePages: page.hasMorePages,
         nextCursor: page.nextCursor,
       };
+    });
+  }
+
+  create(params: CreatePaymentParams): Promise<Payment> {
+    return recurlyRequest(async () => {
+      validateCreatePaymentParams(params, CashierProvider.Recurly);
+
+      const {
+        customer,
+        amount,
+        paymentMethod,
+        description,
+        metadata,
+        idempotencyKey,
+      } = params;
+      const currency = params.currency.toUpperCase();
+      const account = await this.client.getAccount(customer);
+      const invoice = await createRecurlyPurchase(
+        this.client,
+        {
+          currency,
+          account: { code: account.code },
+          collectionMethod: 'automatic',
+          billingInfoId: paymentMethod,
+          lineItems: [
+            toRecurlyPurchaseLineItem(currency, {
+              amount,
+              description,
+              metadata,
+            }),
+          ],
+        },
+        idempotencyKey,
+      );
+      const transaction = invoice.transactions?.find(
+        (candidate) => candidate.type === 'purchase',
+      );
+
+      if (!transaction) {
+        throw new ProviderError(
+          `Recurly did not run a transaction for invoice ${invoice.id}`,
+          { provider: CashierProvider.Recurly },
+        );
+      }
+
+      return mapRecurlyPayment(transaction);
     });
   }
 

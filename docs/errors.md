@@ -63,19 +63,19 @@ try {
 
 ## How provider errors are mapped
 
-| Cashier error               | Stripe                                                                                  | Recurly                                                                                        |
-| --------------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `NotFoundError`             | `resource_missing`, HTTP 404                                                            | `not_found`, HTTP 404                                                                          |
-| `AuthenticationError`       | Authentication error, HTTP 401                                                          | `unauthorized`, `invalid_api_key`                                                              |
-| `AuthorizationError`        | Permission error, HTTP 403                                                              | `forbidden`, `invalid_permissions`                                                             |
-| `ValidationError`           | Invalid request error, HTTP 400 and 422                                                 | `bad_request`, `validation` and other HTTP 422 errors                                          |
-| `PaymentFailedError`        | Card errors not listed below, HTTP 402                                                  | Declined transactions, `payment_required`                                                      |
-| `PaymentMethodError`        | `expired_card`, `incorrect_cvc`, `incorrect_number`, `invalid_number` and similar codes | `invalid_token`, and transactions with `expired_card`, `invalid_card_number` and similar codes |
-| `SubscriptionError`         |                                                                                         | `immutable_subscription`                                                                       |
-| `RateLimitError`            | Rate limit error, HTTP 429                                                              | `rate_limited`, HTTP 429                                                                       |
-| `ConflictError`             | Idempotency error, `lock_timeout`, HTTP 409                                             | `simultaneous_request`, `precondition_failed`, HTTP 409 and 412                                |
-| `UnsupportedOperationError` |                                                                                         | `missing_feature`, and every Recurly `prices` method                                           |
-| `ProviderError`             | API and connection errors, anything else                                                | Server and network errors, anything else                                                       |
+| Cashier error               | Stripe                                                                                  | Recurly                                                                                         |
+| --------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `NotFoundError`             | `resource_missing`, HTTP 404                                                            | `not_found`, HTTP 404                                                                           |
+| `AuthenticationError`       | Authentication error, HTTP 401                                                          | `unauthorized`, `invalid_api_key`                                                               |
+| `AuthorizationError`        | Permission error, HTTP 403                                                              | `forbidden`, `invalid_permissions`                                                              |
+| `ValidationError`           | Invalid request error, HTTP 400 and 422                                                 | `bad_request`, `validation` and other HTTP 422 errors                                           |
+| `PaymentFailedError`        | Card errors not listed below, HTTP 402                                                  | Declined transactions, `payment_required`                                                       |
+| `PaymentMethodError`        | `expired_card`, `incorrect_cvc`, `incorrect_number`, `invalid_number` and similar codes | `invalid_token`, and transactions with `expired_card`, `invalid_card_number` and similar codes  |
+| `SubscriptionError`         |                                                                                         | `immutable_subscription`                                                                        |
+| `RateLimitError`            | Rate limit error, HTTP 429                                                              | `rate_limited`, HTTP 429                                                                        |
+| `ConflictError`             | Idempotency error, `lock_timeout`, HTTP 409                                             | `simultaneous_request`, `precondition_failed`, HTTP 409 and 412                                 |
+| `UnsupportedOperationError` |                                                                                         | `missing_feature`, every Recurly `prices` method, and `paymentMethodTypes` on `invoices.create` |
+| `ProviderError`             | API and connection errors, anything else                                                | Server and network errors, anything else                                                        |
 
 ## HTTP responses
 

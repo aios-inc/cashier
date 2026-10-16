@@ -1,6 +1,7 @@
 import * as recurly from 'recurly';
 import { RecurlyPaymentsResource } from '../../src/drivers/recurly/resources/recurly-payments.resource';
 import { NotFoundError } from '../../src/errors/not-found.error';
+import { PaymentFailedError } from '../../src/errors/payment-failed.error';
 import { ProviderError } from '../../src/errors/provider.error';
 import { UnsupportedOperationError } from '../../src/errors/unsupported-operation.error';
 import { ValidationError } from '../../src/errors/validation.error';
@@ -290,6 +291,116 @@ describe('RecurlyPaymentsResource', () => {
       await expect(
         payments.cursorPaginate({ customer: RECURLY_FIXTURES.ACCOUNT_ID }),
       ).rejects.toBeInstanceOf(ProviderError);
+    });
+  });
+
+  describe('create', () => {
+    const PARAMS = {
+      customer: RECURLY_FIXTURES.ACCOUNT_ID,
+      currency: 'gbp',
+      amount: 12900,
+      paymentMethod: RECURLY_FIXTURES.BILLING_INFO_ID,
+      description: 'Wegovy 0.5mg',
+    };
+    const PURCHASE = {
+      chargeInvoice: {
+        ...RECURLY_FIXTURES.PAID_INVOICE,
+        transactions: [RECURLY_FIXTURES.SUCCESSFUL_TRANSACTION],
+      },
+    };
+
+    beforeEach(() => {
+      client.getAccount.mockResolvedValue(RECURLY_FIXTURES.ACCOUNT);
+      client.createPurchase.mockResolvedValue(PURCHASE);
+    });
+
+    it('should make one automatic purchase in major units with the billing info', async () => {
+      await payments.create({ ...PARAMS, amount: 1999 });
+
+      expect(client.createPurchase).toHaveBeenCalledTimes(1);
+      expect(client.createPurchase).toHaveBeenCalledWith({
+        currency: 'GBP',
+        account: { code: RECURLY_FIXTURES.ACCOUNT_CODE },
+        collectionMethod: 'automatic',
+        billingInfoId: RECURLY_FIXTURES.BILLING_INFO_ID,
+        lineItems: [
+          {
+            currency: 'GBP',
+            unitAmount: 19.99,
+            type: 'charge',
+            description: 'Wegovy 0.5mg',
+          },
+        ],
+      });
+    });
+
+    it('should keep zero-decimal amounts unchanged', async () => {
+      await payments.create({ ...PARAMS, currency: 'JPY', amount: 5000 });
+
+      expect(client.createPurchase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lineItems: [expect.objectContaining({ unitAmount: 5000 })],
+        }),
+      );
+    });
+
+    it('should pass the idempotency key as a request header', async () => {
+      await payments.create({ ...PARAMS, idempotencyKey: 'order-42' });
+
+      expect(client.createPurchase).toHaveBeenCalledWith(expect.any(Object), {
+        headers: { 'Idempotency-Key': 'order-42' },
+      });
+    });
+
+    it('should return the purchase transaction as a payment that can be refunded', async () => {
+      client.getTransaction.mockResolvedValue(
+        RECURLY_FIXTURES.SUCCESSFUL_TRANSACTION,
+      );
+      client.refundInvoice.mockResolvedValue(RECURLY_FIXTURES.CREDIT_INVOICE);
+
+      const payment = await payments.create(PARAMS);
+      await payments.refund(payment.id);
+
+      expect(payment).toEqual(RECURLY_FIXTURES.EXPECTED_PAYMENTS[0]);
+      expect(client.getTransaction).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.PAYMENT_ID,
+      );
+    });
+
+    it('should throw PaymentFailedError when the transaction is declined', async () => {
+      client.createPurchase.mockRejectedValue(
+        withRecurlyStatus(
+          new recurly.errors.TransactionError(
+            'Transaction declined',
+            'transaction',
+            {
+              transactionError: {
+                code: 'declined',
+                declineCode: 'do_not_honor',
+              },
+            },
+          ),
+          422,
+        ),
+      );
+
+      await expect(payments.create(PARAMS)).rejects.toMatchObject({
+        constructor: PaymentFailedError,
+        provider: CashierProvider.Recurly,
+        providerStatus: 422,
+        providerCode: 'declined',
+        declineCode: 'do_not_honor',
+      });
+    });
+
+    it('should throw ProviderError when the purchase ran no transaction', async () => {
+      client.createPurchase.mockResolvedValue({
+        chargeInvoice: { ...RECURLY_FIXTURES.PAID_INVOICE, transactions: [] },
+      });
+
+      await expect(payments.create(PARAMS)).rejects.toBeInstanceOf(
+        ProviderError,
+      );
     });
   });
 

@@ -18,6 +18,20 @@ export const fromUnixSeconds = (
   unixSeconds: number | null | undefined,
 ): Date | null => (unixSeconds ? new Date(unixSeconds * 1000) : null);
 
+export const toUnixSeconds = (date: Date): number =>
+  Math.floor(date.getTime() / 1000);
+
+export const toStripeRequestOptions = (
+  idempotencyKey: string | undefined,
+  step?: string,
+): [Stripe.RequestOptions] | [] => {
+  if (!idempotencyKey) return [];
+
+  return [
+    { idempotencyKey: step ? `${idempotencyKey}-${step}` : idempotencyKey },
+  ];
+};
+
 export const toStripeInterval = (
   recurring: Stripe.Price.Recurring | null | undefined,
 ): BillingInterval | null =>
