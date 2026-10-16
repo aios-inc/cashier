@@ -1,9 +1,10 @@
 # Payments
 
-`driver.payments` lists a customer's payments, the charges made against their payment method whether they succeeded or not, and refunds them.
+`driver.payments` charges a customer's saved payment method, lists their payments, the charges made against their payment method whether they succeeded or not, and refunds them.
 
 - [`payments.list(params)`](#paymentslistparams)
 - [`payments.cursorPaginate(params)`](#paymentscursorpaginateparams)
+- [`payments.create(params)`](#paymentscreateparams)
 - [`payments.refund(paymentId, params?)`](#paymentsrefundpaymentid-params)
 - [Loading relations with `with`](#loading-relations-with-with)
 - [The `Payment` object](#the-payment-object)
@@ -57,6 +58,41 @@ It returns a `CursorPaginator<Payment>`. See [Pagination and limits](drivers.md#
 | -------- | ------------------------------------------------------------------------------------------------------------------------ |
 | Stripe   | Lists the customer's PaymentIntents after the cursor, which is the id of the last payment. The maximum `perPage` is 100. |
 | Recurly  | Lists the account's payment transactions with Recurly's own cursor. The maximum `perPage` is 200.                        |
+
+## `payments.create(params)`
+
+Charges a customer's saved payment method right away, off-session, and returns the payment.
+
+```ts
+const payment = await driver.payments.create({
+  customer: 'cus_123',
+  currency: 'EUR',
+  amount: 12900,
+  paymentMethod: 'pm_123',
+  description: 'Consultation',
+  metadata: { order: 'order-42' },
+  idempotencyKey: 'order-42',
+});
+```
+
+| Parameter        | Type                     | Description                                                                 |
+| ---------------- | ------------------------ | --------------------------------------------------------------------------- |
+| `customer`       | `string`                 | Required. The customer id.                                                  |
+| `currency`       | `string`                 | Required. ISO 4217 code, for example `EUR`. Cashier never picks a currency. |
+| `amount`         | `number`                 | Required. A positive integer in minor units.                                |
+| `paymentMethod`  | `string`                 | Required. Stripe payment method id or Recurly billing info id.              |
+| `description`    | `string`                 | What the payment is for.                                                    |
+| `metadata`       | `Record<string, string>` | Extra key and value pairs.                                                  |
+| `idempotencyKey` | `string`                 | Makes a retry with the same key safe.                                       |
+
+Invalid parameters reject with `ValidationError` before any request. The returned `id` is the one `payments.refund` takes and `payments.list` returns.
+
+| Provider | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stripe   | Creates and confirms an off-session PaymentIntent limited to the `card` and `link` payment method types, so redirect-based methods and the methods configured in the Dashboard do not apply. The `id` is the PaymentIntent id. When the bank asks for 3D Secure and Stripe leaves the PaymentIntent in `requires_action`, the payment comes back with status `incomplete` instead of rejecting. `idempotencyKey` is sent unchanged. |
+| Recurly  | Looks up the account, then makes one purchase with the `automatic` collection method and one line item for `amount`, charged to `paymentMethod`. `metadata` is saved as custom fields on the line item. The `id` is the purchase transaction id. `idempotencyKey` is sent as the `Idempotency-Key` header.                                                                                                                          |
+
+A declined payment rejects with `PaymentFailedError` or `PaymentMethodError` on both providers. See [Errors](errors.md). On Stripe, a card that needs authentication off-session usually declines with `authentication_required`, which is a `PaymentFailedError`.
 
 ## `payments.refund(paymentId, params?)`
 

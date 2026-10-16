@@ -73,6 +73,28 @@ export interface CursorPaginateInvoicesParams<
   status?: 'paid';
 }
 
+export type InvoiceCollection = 'charge_automatically' | 'send_invoice';
+
+export interface CreateInvoiceLineItem {
+  description: string;
+  amount: number;
+}
+
+export interface CreateInvoiceParams {
+  customer: string;
+  currency: string;
+  lineItems: CreateInvoiceLineItem[];
+  collection: InvoiceCollection;
+  chargeNow?: boolean;
+  description?: string;
+  dueDate?: Date;
+  daysUntilDue?: number;
+  paymentMethod?: string;
+  paymentMethodTypes?: string[];
+  metadata?: Record<string, string>;
+  idempotencyKey?: string;
+}
+
 export interface PayInvoiceParams {
   paymentMethod?: string;
 }
@@ -90,6 +112,7 @@ export interface InvoicesResource<
   cursorPaginate<Relation extends ProviderInvoiceRelation<Provider> = never>(
     params: CursorPaginateInvoicesParams<Relation>,
   ): Promise<CursorPaginator<InvoiceWith<Relation>>>;
+  create(params: CreateInvoiceParams): Promise<Invoice>;
   pay(invoiceId: string, params?: PayInvoiceParams): Promise<Invoice>;
   void(invoiceId: string): Promise<Invoice>;
 }

@@ -101,6 +101,16 @@ export interface CursorPaginatePaymentsParams<
 >
   extends CursorPaginateParams, WithParams<Relation> {}
 
+export interface CreatePaymentParams {
+  customer: string;
+  currency: string;
+  amount: number;
+  paymentMethod: string;
+  description?: string;
+  metadata?: Record<string, string>;
+  idempotencyKey?: string;
+}
+
 export interface RefundPaymentParams {
   amount?: number;
   reason?: RefundReason;
@@ -116,5 +126,6 @@ export interface PaymentsResource<
   cursorPaginate<Relation extends ProviderPaymentRelation<Provider> = never>(
     params: CursorPaginatePaymentsParams<Relation>,
   ): Promise<CursorPaginator<PaymentWith<Relation>>>;
+  create(params: CreatePaymentParams): Promise<Payment>;
   refund(paymentId: string, params?: RefundPaymentParams): Promise<Refund>;
 }

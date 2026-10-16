@@ -1,6 +1,7 @@
 import * as recurly from 'recurly';
 import { CashierProvider } from '../../../types/cashier.types';
 import {
+  CreateInvoiceParams,
   CursorPaginateInvoicesParams,
   GetInvoiceParams,
   Invoice,
@@ -12,12 +13,21 @@ import {
 } from '../../../types/invoice.types';
 import { CursorPaginator } from '../../../types/pagination.types';
 import {
+  DEFAULT_DAYS_UNTIL_DUE,
   DEFAULT_LIST_LIMIT,
+  MILLISECONDS_PER_DAY,
+  RECURLY_COLLECTION_METHODS,
   RECURLY_INVOICE_RELATIONS,
 } from '../../../constants/cashier.constants';
+import { UnsupportedOperationError } from '../../../errors/unsupported-operation.error';
+import { validateCreateInvoiceParams } from '../../../utils/create-params.utils';
 import { resolveRelations } from '../../../utils/relations.utils';
 import { mapRecurlyInvoice } from '../mappers/recurly-invoice.mapper';
 import { readRecurlyItems, readRecurlyPage } from '../recurly-page';
+import {
+  createRecurlyPurchase,
+  toRecurlyPurchaseLineItem,
+} from '../recurly-purchase';
 import { recurlyRequest } from '../recurly-request';
 
 type RecurlyInvoiceRelation = ProviderInvoiceRelation<CashierProvider.Recurly>;
@@ -34,6 +44,24 @@ const toInvoiceMapper = <Relation extends RecurlyInvoiceRelation>(
 
   return (invoice) =>
     mapRecurlyInvoice(invoice, relations) as InvoiceWith<Relation>;
+};
+
+const toRecurlyNetTerms = ({
+  collection,
+  dueDate,
+  daysUntilDue = DEFAULT_DAYS_UNTIL_DUE,
+}: CreateInvoiceParams): Pick<
+  recurly.PurchaseCreate,
+  'netTerms' | 'netTermsType'
+> => {
+  if (collection !== 'send_invoice') return {};
+
+  return {
+    netTerms: dueDate
+      ? Math.ceil((dueDate.getTime() - Date.now()) / MILLISECONDS_PER_DAY)
+      : daysUntilDue,
+    netTermsType: 'net',
+  };
 };
 
 export class RecurlyInvoicesResource implements InvoicesResource<CashierProvider.Recurly> {
@@ -86,6 +114,55 @@ export class RecurlyInvoicesResource implements InvoicesResource<CashierProvider
         hasMorePages: page.hasMorePages,
         nextCursor: page.nextCursor,
       };
+    });
+  }
+
+  create(params: CreateInvoiceParams): Promise<Invoice> {
+    return recurlyRequest(async () => {
+      validateCreateInvoiceParams(params, CashierProvider.Recurly);
+
+      if (params.paymentMethodTypes) {
+        throw new UnsupportedOperationError(
+          'Recurly cannot restrict the payment method types of an invoice',
+          { provider: CashierProvider.Recurly },
+        );
+      }
+
+      const {
+        customer,
+        lineItems,
+        collection,
+        description,
+        paymentMethod,
+        metadata,
+        idempotencyKey,
+      } = params;
+      const currency = params.currency.toUpperCase();
+      const account = await this.client.getAccount(customer);
+
+      return mapRecurlyInvoice(
+        await createRecurlyPurchase(
+          this.client,
+          {
+            currency,
+            account: { code: account.code },
+            collectionMethod: RECURLY_COLLECTION_METHODS[collection],
+            lineItems: lineItems.map((lineItem) =>
+              toRecurlyPurchaseLineItem(currency, {
+                amount: lineItem.amount,
+                description: lineItem.description || description,
+                metadata,
+              }),
+            ),
+            ...toRecurlyNetTerms(params),
+            ...(collection === 'charge_automatically' && paymentMethod
+              ? { billingInfoId: paymentMethod }
+              : {}),
+            ...(description ? { customerNotes: description } : {}),
+          },
+          idempotencyKey,
+        ),
+      );
     });
   }
 

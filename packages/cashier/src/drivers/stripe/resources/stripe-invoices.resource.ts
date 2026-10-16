@@ -1,6 +1,7 @@
 import Stripe from 'stripe';
 import { CashierProvider } from '../../../types/cashier.types';
 import {
+  CreateInvoiceParams,
   CursorPaginateInvoicesParams,
   GetInvoiceParams,
   Invoice,
@@ -12,14 +13,18 @@ import {
 } from '../../../types/invoice.types';
 import { CursorPaginator } from '../../../types/pagination.types';
 import {
+  DEFAULT_DAYS_UNTIL_DUE,
   DEFAULT_LIST_LIMIT,
   STRIPE_INVOICE_RELATION_EXPAND,
 } from '../../../constants/cashier.constants';
+import { validateCreateInvoiceParams } from '../../../utils/create-params.utils';
 import { resolveRelations } from '../../../utils/relations.utils';
 import { mapStripeInvoice } from '../mappers/stripe-invoice.mapper';
 import {
   toStripeCursorPaginator,
   toStripeExpand,
+  toStripeRequestOptions,
+  toUnixSeconds,
 } from '../mappers/stripe-mapper.utils';
 import { stripeRequest } from '../stripe-request';
 
@@ -38,6 +43,58 @@ const resolveInvoiceRelations = <Relation extends StripeInvoiceRelation>(
     STRIPE_INVOICE_RELATIONS,
     requested,
   );
+
+const toStripeDueTerms = ({
+  collection,
+  dueDate,
+  daysUntilDue = DEFAULT_DAYS_UNTIL_DUE,
+}: CreateInvoiceParams): Pick<
+  Stripe.InvoiceCreateParams,
+  'due_date' | 'days_until_due'
+> => {
+  if (collection !== 'send_invoice') return {};
+
+  return dueDate
+    ? { due_date: toUnixSeconds(dueDate) }
+    : { days_until_due: daysUntilDue };
+};
+
+const toStripeInvoiceCreateParams = (
+  params: CreateInvoiceParams,
+): Stripe.InvoiceCreateParams => {
+  const {
+    customer,
+    currency,
+    collection,
+    chargeNow = false,
+    description,
+    paymentMethod,
+    paymentMethodTypes,
+    metadata,
+  } = params;
+
+  return {
+    customer,
+    currency: currency.toLowerCase(),
+    collection_method: collection,
+    auto_advance: !chargeNow,
+    pending_invoice_items_behavior: 'exclude',
+    ...(description ? { description } : {}),
+    ...(metadata ? { metadata } : {}),
+    ...toStripeDueTerms(params),
+    ...(collection === 'charge_automatically' && paymentMethod
+      ? { default_payment_method: paymentMethod }
+      : {}),
+    ...(paymentMethodTypes
+      ? {
+          payment_settings: {
+            payment_method_types:
+              paymentMethodTypes as Stripe.InvoiceCreateParams.PaymentSettings.PaymentMethodType[],
+          },
+        }
+      : {}),
+  };
+};
 
 export class StripeInvoicesResource implements InvoicesResource<CashierProvider.Stripe> {
   constructor(private readonly client: Stripe) {}
@@ -93,6 +150,49 @@ export class StripeInvoicesResource implements InvoicesResource<CashierProvider.
       perPage,
       relations,
     );
+  }
+
+  create(params: CreateInvoiceParams): Promise<Invoice> {
+    return stripeRequest(async () => {
+      validateCreateInvoiceParams(params, CashierProvider.Stripe);
+
+      const { customer, currency, lineItems, description, metadata } = params;
+      const options = (step: string) =>
+        toStripeRequestOptions(params.idempotencyKey, step);
+
+      const invoice = await this.client.invoices.create(
+        toStripeInvoiceCreateParams(params),
+        ...options('invoice'),
+      );
+
+      for (const [index, lineItem] of lineItems.entries()) {
+        const itemDescription = lineItem.description || description;
+
+        await this.client.invoiceItems.create(
+          {
+            customer,
+            invoice: invoice.id,
+            amount: lineItem.amount,
+            currency: currency.toLowerCase(),
+            ...(itemDescription ? { description: itemDescription } : {}),
+            ...(metadata ? { metadata } : {}),
+          },
+          ...options(`item-${index}`),
+        );
+      }
+
+      const finalized = await this.client.invoices.finalizeInvoice(
+        invoice.id,
+        {},
+        ...options('finalize'),
+      );
+
+      return mapStripeInvoice(
+        params.chargeNow
+          ? await this.client.invoices.pay(invoice.id, {}, ...options('pay'))
+          : finalized,
+      );
+    });
   }
 
   pay(invoiceId: string, params: PayInvoiceParams = {}): Promise<Invoice> {

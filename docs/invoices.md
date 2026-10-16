@@ -1,11 +1,12 @@
 # Invoices
 
-`driver.invoices` reads, pays and voids invoices.
+`driver.invoices` creates, reads, pays and voids invoices.
 
 - [`invoices.get(invoiceId, params?)`](#invoicesgetinvoiceid-params)
 - [`invoices.list(params)`](#invoiceslistparams)
 - [`invoices.cursorPaginate(params)`](#invoicescursorpaginateparams)
 - [Loading relations with `with`](#loading-relations-with-with)
+- [`invoices.create(params)`](#invoicescreateparams)
 - [`invoices.pay(invoiceId, params?)`](#invoicespayinvoiceid-params)
 - [`invoices.void(invoiceId)`](#invoicesvoidinvoiceid)
 - [The `Invoice` object](#the-invoice-object)
@@ -95,6 +96,68 @@ It returns a `CursorPaginator<Invoice>`. See [Pagination and limits](drivers.md#
 | `refunds` | `amountRefunded` | Expands `charge` | No extra cost |
 
 `amountRefunded` is in minor units: the charge's `amount_refunded` on Stripe, and `paid` minus `refundableAmount` on Recurly charge invoices (`0` on other invoices).
+
+## `invoices.create(params)`
+
+Creates a one-off invoice with one or more line items, issues it and returns it. It either charges the customer's saved payment method or sends the customer an invoice to pay.
+
+```ts
+const invoice = await driver.invoices.create({
+  customer: 'cus_123',
+  currency: 'EUR',
+  lineItems: [
+    { description: 'Consultation', amount: 4500 },
+    { description: 'Blood test', amount: 1999 },
+  ],
+  collection: 'charge_automatically',
+  chargeNow: true,
+  paymentMethod: 'pm_123',
+  metadata: { order: 'order-42' },
+  idempotencyKey: 'order-42',
+});
+
+const sentInvoice = await driver.invoices.create({
+  customer: 'cus_123',
+  currency: 'GBP',
+  lineItems: [{ description: 'Consultation', amount: 4500 }],
+  collection: 'send_invoice',
+  daysUntilDue: 14,
+});
+```
+
+| Parameter                 | Type                                       | Description                                                                                                                               |
+| ------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `customer`                | `string`                                   | Required. The customer id.                                                                                                                |
+| `currency`                | `string`                                   | Required. ISO 4217 code, for example `EUR`. Cashier never picks a currency.                                                               |
+| `lineItems`               | `CreateInvoiceLineItem[]`                  | Required. At least one item.                                                                                                              |
+| `lineItems[].description` | `string`                                   | The line item's description. When empty, the invoice `description` is used.                                                               |
+| `lineItems[].amount`      | `number`                                   | A positive integer in minor units.                                                                                                        |
+| `collection`              | `'charge_automatically' \| 'send_invoice'` | Required. Charge the saved payment method, or send the invoice for the customer to pay.                                                   |
+| `chargeNow`               | `boolean`                                  | Charge right away and return the paid invoice. Only with `charge_automatically`. Defaults to `false`.                                     |
+| `description`             | `string`                                   | Shown to the customer on the invoice.                                                                                                     |
+| `dueDate`                 | `Date`                                     | When the invoice is due. Only with `send_invoice`, must be in the future, and cannot be combined with `daysUntilDue`.                     |
+| `daysUntilDue`            | `number`                                   | Days until the invoice is due. Only with `send_invoice`. Defaults to `30` when neither `dueDate` nor `daysUntilDue` is given.             |
+| `paymentMethod`           | `string`                                   | Stripe payment method id or Recurly billing info id to charge. Used with `charge_automatically` only. Defaults to the customer's default. |
+| `paymentMethodTypes`      | `string[]`                                 | Stripe payment method types the hosted invoice accepts, for example `['card']`. Stripe only.                                              |
+| `metadata`                | `Record<string, string>`                   | Extra key and value pairs.                                                                                                                |
+| `idempotencyKey`          | `string`                                   | Makes a retry with the same key safe. See the table below.                                                                                |
+
+Invalid parameters reject with `ValidationError` before any request.
+
+| Provider | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stripe   | Creates a draft invoice in `currency` that leaves out the customer's other pending invoice items, adds one invoice item per line item, then finalizes it. With `chargeNow` it pays the invoice and returns the paid invoice. Without it, `auto_advance` is on, so Stripe charges automatic invoices itself about an hour later and emails `send_invoice` invoices. `metadata` is set on the invoice and every item. `hostedInvoiceUrl` is always set. |
+| Recurly  | Looks up the account, then makes one purchase with exactly these line items, so other pending charges on the account are not billed. `charge_automatically` becomes the `automatic` collection method and `send_invoice` becomes `manual`. `description` becomes the customer notes and `metadata` is saved as custom fields on every line item. Returns the purchase's charge invoice. `hostedInvoiceUrl` is always `null`.                          |
+
+| Option               | Stripe                                                                                                  | Recurly                                                                                                                                                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `chargeNow`          | Pays the invoice right after finalizing it.                                                             | Needs no extra call: Recurly collects an automatic invoice when it is created, with or without `chargeNow`.                                                                                                               |
+| `dueDate`            | Sent as `due_date`.                                                                                     | Sent as `net` net terms: the whole days from now to `dueDate`, rounded up. The invoice is due that many days after it is created, at the time it was created, so it can fall up to one day after `dueDate`, never before. |
+| `daysUntilDue`       | Sent as `days_until_due`.                                                                               | Sent as `net` net terms.                                                                                                                                                                                                  |
+| `paymentMethodTypes` | Sent as `payment_settings.payment_method_types`.                                                        | Recurly has no equivalent, so it rejects with `UnsupportedOperationError` before any request.                                                                                                                             |
+| `idempotencyKey`     | Each request gets its own key: `<key>-invoice`, `<key>-item-<index>`, `<key>-finalize` and `<key>-pay`. | Sent unchanged as the `Idempotency-Key` header of the purchase.                                                                                                                                                           |
+
+A declined payment rejects with `PaymentFailedError` or `PaymentMethodError`. See [Errors](errors.md). On Stripe the invoice is already finalized when `chargeNow` fails, so it stays open.
 
 ## `invoices.pay(invoiceId, params?)`
 

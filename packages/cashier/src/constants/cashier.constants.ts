@@ -1,5 +1,8 @@
 import Stripe from 'stripe';
-import { CashierInvoiceRelations } from '../types/invoice.types';
+import {
+  CashierInvoiceRelations,
+  InvoiceCollection,
+} from '../types/invoice.types';
 import { CashierPaymentRelations, RefundReason } from '../types/payment.types';
 import {
   CashierSubscriptionRelations,
@@ -15,6 +18,17 @@ export const RECURLY_MAX_LIST_LIMIT = 200;
 export const DRIVER_CACHE_SIZE = 100;
 
 export const STRIPE_MAX_CANCELLATION_COMMENT_LENGTH = 5000;
+
+export const DEFAULT_DAYS_UNTIL_DUE = 30;
+
+export const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+
+export const STRIPE_OFF_SESSION_PAYMENT_METHOD_TYPES = ['card', 'link'];
+
+export const RECURLY_COLLECTION_METHODS: Record<InvoiceCollection, string> = {
+  charge_automatically: 'automatic',
+  send_invoice: 'manual',
+};
 
 export const STRIPE_PAYMENT_RELATION_EXPAND: Record<
   CashierPaymentRelations['stripe'],
