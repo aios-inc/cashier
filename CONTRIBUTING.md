@@ -89,7 +89,7 @@ Releases are fully automated with [semantic-release](https://semantic-release.gi
 | `feat!: ...` or a `BREAKING CHANGE:` footer         | Major, for example 1.0.0 |
 | `chore`, `ci`, `test`, `build`, `refactor`, `style` | No release               |
 
-When there is something to release, the workflow creates the `vX.Y.Z` tag, publishes a GitHub Release with notes generated from the commits, and publishes every package in `packages/` to npm under [`@aios-inc`](https://www.npmjs.com/org/aios-inc) with provenance. All packages are released together with the same version. Nothing is committed back to the repository, so the `version` in each `package.json` stays at `0.0.0-development`. The published version comes from the tag.
+When there is something to release, the workflow creates the `vX.Y.Z` tag, publishes a GitHub Release with notes generated from the commits, and publishes every package in `packages/` to npm under [`@aios-inc`](https://www.npmjs.com/org/aios-inc) with provenance. Publishing uses [npm trusted publishing](https://docs.npmjs.com/trusted-publishers), so the workflow needs no npm token. All packages are released together with the same version. Nothing is committed back to the repository, so the `version` in each `package.json` stays at `0.0.0-development`. The published version comes from the tag.
 
 `docs` commits publish a patch because npm only updates the README shown on npmjs.com when a new version is published. Use `chore` for changes that should not be released, such as typo fixes in CONTRIBUTING.md.
 
