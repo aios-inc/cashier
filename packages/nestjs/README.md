@@ -1,14 +1,14 @@
-# @aios-medical/cashier-nestjs
+# @aios-inc/cashier-nestjs
 
-[![npm](https://img.shields.io/npm/v/@aios-medical/cashier-nestjs.svg)](https://www.npmjs.com/package/@aios-medical/cashier-nestjs)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/fellahealth/cashier/blob/main/LICENSE)
+[![npm](https://img.shields.io/npm/v/@aios-inc/cashier-nestjs.svg)](https://www.npmjs.com/package/@aios-inc/cashier-nestjs)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/aios-inc/cashier/blob/main/LICENSE)
 
-NestJS module for [Cashier](https://github.com/fellahealth/cashier), unified subscription billing for Node.js and TypeScript. Register it with `forRoot` or `forRootAsync`, inject `CashierService` anywhere, and turn billing errors into proper HTTP responses. Supports NestJS 9, 10, 11 and 12.
+NestJS module for [Cashier](https://github.com/aios-inc/cashier), unified subscription billing for Node.js and TypeScript. Register it with `forRoot` or `forRootAsync`, inject `CashierService` anywhere, and turn billing errors into proper HTTP responses. Supports NestJS 9, 10, 11 and 12.
 
 ## Install
 
 ```bash
-npm install @aios-medical/cashier @aios-medical/cashier-nestjs stripe recurly
+npm install @aios-inc/cashier @aios-inc/cashier-nestjs stripe recurly
 ```
 
 ## Usage
@@ -21,8 +21,8 @@ import {
   CashierExceptionFilter,
   CashierModule,
   CashierService,
-} from '@aios-medical/cashier-nestjs';
-import { CashierProvider } from '@aios-medical/cashier';
+} from '@aios-inc/cashier-nestjs';
+import { CashierProvider } from '@aios-inc/cashier';
 
 @Module({
   imports: [
@@ -61,10 +61,10 @@ export class BillingService {
 
 ## Documentation
 
-- [NestJS guide](https://github.com/fellahealth/cashier/blob/main/docs/nestjs.md): every option, the exception filter and testing.
-- [API reference](https://github.com/fellahealth/cashier/blob/main/docs/README.md): customers, invoices, payments, products, prices and subscriptions.
-- [Errors](https://github.com/fellahealth/cashier/blob/main/docs/errors.md): every error class and the HTTP responses.
+- [NestJS guide](https://github.com/aios-inc/cashier/blob/main/docs/nestjs.md): every option, the exception filter and testing.
+- [API reference](https://github.com/aios-inc/cashier/blob/main/docs/README.md): customers, invoices, payments, products, prices and subscriptions.
+- [Errors](https://github.com/aios-inc/cashier/blob/main/docs/errors.md): every error class and the HTTP responses.
 
 ## License
 
-[MIT](https://github.com/fellahealth/cashier/blob/main/LICENSE) © AIOS
+[MIT](https://github.com/aios-inc/cashier/blob/main/LICENSE) © AIOS

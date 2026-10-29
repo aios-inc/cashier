@@ -1,9 +1,9 @@
 # NestJS
 
-`@aios-medical/cashier-nestjs` adds a `CashierModule` with `forRoot` and `forRootAsync`, an injectable `CashierService`, and an exception filter that turns Cashier errors into HTTP responses. It supports NestJS 9, 10, 11 and 12.
+`@aios-inc/cashier-nestjs` adds a `CashierModule` with `forRoot` and `forRootAsync`, an injectable `CashierService`, and an exception filter that turns Cashier errors into HTTP responses. It supports NestJS 9, 10, 11 and 12.
 
 ```bash
-npm install @aios-medical/cashier @aios-medical/cashier-nestjs stripe recurly
+npm install @aios-inc/cashier @aios-inc/cashier-nestjs stripe recurly
 ```
 
 ## Register the module
@@ -12,8 +12,8 @@ With values known up front, use `forRoot`:
 
 ```ts
 import { Module } from '@nestjs/common';
-import { CashierModule } from '@aios-medical/cashier-nestjs';
-import { CashierProvider } from '@aios-medical/cashier';
+import { CashierModule } from '@aios-inc/cashier-nestjs';
+import { CashierProvider } from '@aios-inc/cashier';
 
 @Module({
   imports: [
@@ -33,7 +33,7 @@ To read the keys from `ConfigService` or any other provider, use `forRootAsync`:
 
 ```ts
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { CashierProvider } from '@aios-medical/cashier';
+import { CashierProvider } from '@aios-inc/cashier';
 
 CashierModule.forRootAsync({
   isGlobal: true,
@@ -68,8 +68,8 @@ A missing or empty API key fails when the app starts, not on the first payment.
 
 ```ts
 import { Injectable } from '@nestjs/common';
-import { Subscription } from '@aios-medical/cashier';
-import { CashierService } from '@aios-medical/cashier-nestjs';
+import { Subscription } from '@aios-inc/cashier';
+import { CashierService } from '@aios-inc/cashier-nestjs';
 
 @Injectable()
 export class BillingService {
@@ -105,7 +105,7 @@ Register `CashierExceptionFilter` once, globally:
 ```ts
 import { Module } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
-import { CashierExceptionFilter } from '@aios-medical/cashier-nestjs';
+import { CashierExceptionFilter } from '@aios-inc/cashier-nestjs';
 
 @Module({
   providers: [{ provide: APP_FILTER, useClass: CashierExceptionFilter }],
@@ -129,8 +129,8 @@ Replace `CashierService` with a fake in your testing module:
 
 ```ts
 import { Test } from '@nestjs/testing';
-import { CashierDriver, CashierProvider } from '@aios-medical/cashier';
-import { CashierService } from '@aios-medical/cashier-nestjs';
+import { CashierDriver, CashierProvider } from '@aios-inc/cashier';
+import { CashierService } from '@aios-inc/cashier-nestjs';
 
 const driver = {
   provider: CashierProvider.Stripe,

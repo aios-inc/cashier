@@ -1,5 +1,5 @@
 import type { RequestHandler } from 'express';
-import type { Cashier } from '@aios-medical/cashier';
+import type { Cashier } from '@aios-inc/cashier';
 
 declare module 'express-serve-static-core' {
   interface Request {

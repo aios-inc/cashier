@@ -7,7 +7,7 @@ Thanks for helping improve Cashier. Bug reports, fixes and new provider features
 You need Node.js 20 or later and npm.
 
 ```bash
-git clone https://github.com/fellahealth/cashier.git
+git clone https://github.com/aios-inc/cashier.git
 cd cashier
 npm install
 ```
@@ -30,11 +30,11 @@ Run every script from the repository root. Run `npm run format:check && npm run 
 
 The repository is an npm workspaces monorepo. Every folder in `packages/` is published to npm as its own package.
 
-| Folder             | npm package                     | Contents                                             |
-| ------------------ | ------------------------------- | ---------------------------------------------------- |
-| `packages/cashier` | `@aios-medical/cashier`         | The core library and drivers                         |
-| `packages/nestjs`  | `@aios-medical/cashier-nestjs`  | NestJS module, `CashierService` and exception filter |
-| `packages/express` | `@aios-medical/cashier-express` | Express middleware and error handler                 |
+| Folder             | npm package                 | Contents                                             |
+| ------------------ | --------------------------- | ---------------------------------------------------- |
+| `packages/cashier` | `@aios-inc/cashier`         | The core library and drivers                         |
+| `packages/nestjs`  | `@aios-inc/cashier-nestjs`  | NestJS module, `CashierService` and exception filter |
+| `packages/express` | `@aios-inc/cashier-express` | Express middleware and error handler                 |
 
 Inside a package:
 
@@ -42,9 +42,9 @@ Inside a package:
 - `tests/` mirrors `src/` and uses mocked provider clients, so no network access or API keys are needed.
 - `package.json`, `tsconfig.json` and `tsup.config.ts` hold the package's own settings. Linting, formatting, testing and the shared TypeScript options live at the root.
 
-Documentation for every package lives in `docs/` at the root. The root `README.md` is the npm page of `@aios-medical/cashier`, and the other packages have their own `README.md`. The root `LICENSE` and `CHANGELOG.md` (and the root `README.md` for `packages/cashier`) are copied into each package when it is packed, so do not edit the copies.
+Documentation for every package lives in `docs/` at the root. The root `README.md` is the npm page of `@aios-inc/cashier`, and the other packages have their own `README.md`. The root `LICENSE` and `CHANGELOG.md` (and the root `README.md` for `packages/cashier`) are copied into each package when it is packed, so do not edit the copies.
 
-In the repository, the NestJS and Express packages use the source of `@aios-medical/cashier` directly, through the TypeScript `paths` and Jest `moduleNameMapper` settings. Their peer dependency on `@aios-medical/cashier` is set to the release version when a release is published.
+In the repository, the NestJS and Express packages use the source of `@aios-inc/cashier` directly, through the TypeScript `paths` and Jest `moduleNameMapper` settings. Their peer dependency on `@aios-inc/cashier` is set to the release version when a release is published.
 
 ## Adding a driver
 
@@ -89,7 +89,7 @@ Releases are fully automated with [semantic-release](https://semantic-release.gi
 | `feat!: ...` or a `BREAKING CHANGE:` footer         | Major, for example 1.0.0 |
 | `chore`, `ci`, `test`, `build`, `refactor`, `style` | No release               |
 
-When there is something to release, the workflow creates the `vX.Y.Z` tag, publishes a GitHub Release with notes generated from the commits, and publishes every package in `packages/` to npm under [`@aios-medical`](https://www.npmjs.com/org/aios-medical) with provenance. All packages are released together with the same version. Nothing is committed back to the repository, so the `version` in each `package.json` stays at `0.0.0-development`. The published version comes from the tag.
+When there is something to release, the workflow creates the `vX.Y.Z` tag, publishes a GitHub Release with notes generated from the commits, and publishes every package in `packages/` to npm under [`@aios-inc`](https://www.npmjs.com/org/aios-inc) with provenance. All packages are released together with the same version. Nothing is committed back to the repository, so the `version` in each `package.json` stays at `0.0.0-development`. The published version comes from the tag.
 
 `docs` commits publish a patch because npm only updates the README shown on npmjs.com when a new version is published. Use `chore` for changes that should not be released, such as typo fixes in CONTRIBUTING.md.
 

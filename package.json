@@ -1,11 +1,11 @@
 {
   "name": "aios-cashier",
   "private": true,
-  "description": "Monorepo for @aios-medical/cashier and its framework integrations.",
+  "description": "Monorepo for @aios-inc/cashier and its framework integrations.",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fellahealth/cashier.git"
+    "url": "git+https://github.com/aios-inc/cashier.git"
   },
   "workspaces": [
     "packages/*"

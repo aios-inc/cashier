@@ -1,6 +1,6 @@
 import { ArgumentsHost, Catch, ExceptionFilter, Inject } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
-import { CashierError, toHttpError } from '@aios-medical/cashier';
+import { CashierError, toHttpError } from '@aios-inc/cashier';
 
 @Catch(CashierError)
 export class CashierExceptionFilter implements ExceptionFilter<CashierError> {

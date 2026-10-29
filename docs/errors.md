@@ -40,7 +40,7 @@ import {
   CashierError,
   NotFoundError,
   PaymentFailedError,
-} from '@aios-medical/cashier';
+} from '@aios-inc/cashier';
 
 try {
   await driver.invoices.pay('in_123');
@@ -82,7 +82,7 @@ try {
 `toHttpError(error)` turns a Cashier error into an HTTP status and a JSON body you can send to your API clients. The [NestJS exception filter](nestjs.md#turn-cashier-errors-into-http-responses) and the [Express error handler](express.md#error-responses) use it, so every framework answers the same way.
 
 ```ts
-import { CashierError, toHttpError } from '@aios-medical/cashier';
+import { CashierError, toHttpError } from '@aios-inc/cashier';
 
 if (error instanceof CashierError) {
   const { status, body } = toHttpError(error);

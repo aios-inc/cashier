@@ -1,17 +1,17 @@
 {
-  "name": "@aios-medical/cashier-nestjs",
+  "name": "@aios-inc/cashier-nestjs",
   "version": "0.0.0-development",
   "description": "NestJS module for Cashier: unified subscription billing with forRoot, forRootAsync, an injectable CashierService and an exception filter.",
   "license": "MIT",
   "author": "AIOS",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fellahealth/cashier.git",
+    "url": "git+https://github.com/aios-inc/cashier.git",
     "directory": "packages/nestjs"
   },
-  "homepage": "https://github.com/fellahealth/cashier#readme",
+  "homepage": "https://github.com/aios-inc/cashier#readme",
   "bugs": {
-    "url": "https://github.com/fellahealth/cashier/issues"
+    "url": "https://github.com/aios-inc/cashier/issues"
   },
   "keywords": [
     "nestjs",
@@ -57,7 +57,7 @@
     "prepack": "npm run build && cp ../../LICENSE ../../CHANGELOG.md ."
   },
   "peerDependencies": {
-    "@aios-medical/cashier": "0.0.0-development",
+    "@aios-inc/cashier": "0.0.0-development",
     "@nestjs/common": "^9.0.0 || ^10.0.0 || ^11.0.0 || ^12.0.0",
     "@nestjs/core": "^9.0.0 || ^10.0.0 || ^11.0.0 || ^12.0.0"
   },

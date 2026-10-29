@@ -14,7 +14,7 @@ import {
   NotFoundError,
   PaymentFailedError,
   ProviderError,
-} from '@aios-medical/cashier';
+} from '@aios-inc/cashier';
 import { CashierExceptionFilter } from '../src';
 
 @Controller()
