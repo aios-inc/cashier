@@ -71,7 +71,6 @@
     [
       "@semantic-release/exec",
       {
-        "verifyConditionsCmd": "npm whoami",
         "prepareCmd": "node scripts/set-version.mjs ${nextRelease.version}",
         "publishCmd": "npm publish --workspaces --access public --provenance"
       }
