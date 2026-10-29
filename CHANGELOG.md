@@ -1,6 +1,6 @@
 # Changelog
 
-This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Every merge to `main` with a `feat` or `fix` commit is released automatically, and the notes for each version are generated from its commit messages and published on [GitHub Releases](https://github.com/fellahealth/cashier/releases).
+This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Every merge to `main` with a `feat` or `fix` commit is released automatically, and the notes for each version are generated from its commit messages and published on [GitHub Releases](https://github.com/aios-inc/cashier/releases).
 
 The first release is summarized below.
 
@@ -16,4 +16,4 @@ The first release is summarized below.
 - Typed errors that extend `CashierError`, mapped from Stripe and Recurly errors.
 - CommonJS and ES module builds with TypeScript declarations.
 
-[0.1.0]: https://github.com/fellahealth/cashier/releases/tag/v0.1.0
+[0.1.0]: https://github.com/aios-inc/cashier/releases/tag/v0.1.0

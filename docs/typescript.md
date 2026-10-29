@@ -1,9 +1,9 @@
 # TypeScript
 
-`@aios-medical/cashier` works on its own in any Node.js or TypeScript project. The [NestJS](nestjs.md) and [Express](express.md) packages are thin layers on top of it.
+`@aios-inc/cashier` works on its own in any Node.js or TypeScript project. The [NestJS](nestjs.md) and [Express](express.md) packages are thin layers on top of it.
 
 ```bash
-npm install @aios-medical/cashier stripe recurly
+npm install @aios-inc/cashier stripe recurly
 ```
 
 ## Create a Cashier
@@ -11,7 +11,7 @@ npm install @aios-medical/cashier stripe recurly
 Configure your providers once and create one Cashier for your app:
 
 ```ts
-import { CashierProvider, createCashier } from '@aios-medical/cashier';
+import { CashierProvider, createCashier } from '@aios-inc/cashier';
 
 export const cashier = createCashier({
   default: CashierProvider.Stripe,
@@ -91,7 +91,7 @@ await cashier.use(CashierProvider.Stripe, { apiKey }).customers.get('cus_456');
 `cashier`, exported by the package, is a shared Cashier with no config. It is handy for scripts:
 
 ```ts
-import { cashier, CashierProvider } from '@aios-medical/cashier';
+import { cashier, CashierProvider } from '@aios-inc/cashier';
 
 const billing = cashier.use(CashierProvider.Stripe, {
   apiKey: process.env.STRIPE_SECRET_KEY!,
@@ -105,7 +105,7 @@ In an application, prefer your own `createCashier(...)` so the config lives in o
 Give your classes the Cashier instead of importing it, so tests can pass a fake:
 
 ```ts
-import { Cashier, Subscription } from '@aios-medical/cashier';
+import { Cashier, Subscription } from '@aios-inc/cashier';
 
 export class BillingService {
   constructor(private readonly cashier: Cashier) {}
@@ -123,7 +123,7 @@ const billing = new BillingService(cashier);
 Every method returns a promise, so a fake driver is a plain object with `jest.fn()` methods:
 
 ```ts
-import { Cashier, CashierDriver, CashierProvider } from '@aios-medical/cashier';
+import { Cashier, CashierDriver, CashierProvider } from '@aios-inc/cashier';
 
 const driver = {
   provider: CashierProvider.Stripe,

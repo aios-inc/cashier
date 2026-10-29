@@ -3,7 +3,7 @@ module.exports = {
   roots: ['<rootDir>/packages'],
   testMatch: ['**/tests/**/*.spec.ts'],
   moduleNameMapper: {
-    '^@aios-medical/cashier$': '<rootDir>/packages/cashier/src/index.ts',
+    '^@aios-inc/cashier$': '<rootDir>/packages/cashier/src/index.ts',
   },
   transform: {
     '^.+\\.ts$': [

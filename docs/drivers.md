@@ -3,7 +3,7 @@
 ## Creating a driver
 
 ```ts
-import { CashierProvider, createCashier } from '@aios-medical/cashier';
+import { CashierProvider, createCashier } from '@aios-inc/cashier';
 
 const cashier = createCashier({
   default: CashierProvider.Stripe,

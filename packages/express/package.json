@@ -1,17 +1,17 @@
 {
-  "name": "@aios-medical/cashier-express",
+  "name": "@aios-inc/cashier-express",
   "version": "0.0.0-development",
   "description": "Express middleware and error handler for Cashier: unified subscription billing with typed req.cashier and HTTP error responses.",
   "license": "MIT",
   "author": "AIOS",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fellahealth/cashier.git",
+    "url": "git+https://github.com/aios-inc/cashier.git",
     "directory": "packages/express"
   },
-  "homepage": "https://github.com/fellahealth/cashier#readme",
+  "homepage": "https://github.com/aios-inc/cashier#readme",
   "bugs": {
-    "url": "https://github.com/fellahealth/cashier/issues"
+    "url": "https://github.com/aios-inc/cashier/issues"
   },
   "keywords": [
     "express",
@@ -54,7 +54,7 @@
     "prepack": "npm run build && cp ../../LICENSE ../../CHANGELOG.md ."
   },
   "peerDependencies": {
-    "@aios-medical/cashier": "0.0.0-development",
+    "@aios-inc/cashier": "0.0.0-development",
     "express": "^4.17.0 || ^5.0.0"
   },
   "publishConfig": {

@@ -6,7 +6,7 @@ import {
   NotFoundError,
   PaymentFailedError,
   ProviderError,
-} from '@aios-medical/cashier';
+} from '@aios-inc/cashier';
 import { cashierErrorHandler, cashierMiddleware } from '../src';
 
 const cashier = createCashier({

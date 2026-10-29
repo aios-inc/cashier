@@ -5,7 +5,7 @@
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
     "paths": {
-      "@aios-medical/cashier": ["./packages/cashier/src/index.ts"]
+      "@aios-inc/cashier": ["./packages/cashier/src/index.ts"]
     }
   },
   "include": ["packages/*/src", "packages/*/tests", "packages/*/*.ts"]

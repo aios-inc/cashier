@@ -1,3 +1,3 @@
-import { CashierConfig } from '@aios-medical/cashier';
+import { CashierConfig } from '@aios-inc/cashier';
 
 export type CashierModuleOptions = CashierConfig;

@@ -1,20 +1,20 @@
 # Express
 
-`@aios-medical/cashier-express` adds a middleware that puts your Cashier on every request as `req.cashier`, and an error handler that turns Cashier errors into HTTP responses. It supports Express 4 and 5.
+`@aios-inc/cashier-express` adds a middleware that puts your Cashier on every request as `req.cashier`, and an error handler that turns Cashier errors into HTTP responses. It supports Express 4 and 5.
 
 ```bash
-npm install @aios-medical/cashier @aios-medical/cashier-express stripe recurly
+npm install @aios-inc/cashier @aios-inc/cashier-express stripe recurly
 ```
 
 ## Set up
 
 ```ts
 import express from 'express';
-import { CashierProvider, createCashier } from '@aios-medical/cashier';
+import { CashierProvider, createCashier } from '@aios-inc/cashier';
 import {
   cashierErrorHandler,
   cashierMiddleware,
-} from '@aios-medical/cashier-express';
+} from '@aios-inc/cashier-express';
 
 const cashier = createCashier({
   default: CashierProvider.Stripe,
@@ -85,7 +85,7 @@ app.use(cashierErrorHandler());
 Use your own Cashier in tests and replace `req.cashier` with a fake:
 
 ```ts
-import { Cashier, CashierDriver, CashierProvider } from '@aios-medical/cashier';
+import { Cashier, CashierDriver, CashierProvider } from '@aios-inc/cashier';
 
 const driver = {
   provider: CashierProvider.Stripe,

@@ -1,5 +1,5 @@
 import type { ErrorRequestHandler } from 'express';
-import { CashierError, toHttpError } from '@aios-medical/cashier';
+import { CashierError, toHttpError } from '@aios-inc/cashier';
 
 export const cashierErrorHandler =
   (): ErrorRequestHandler => (error, _req, res, next) => {

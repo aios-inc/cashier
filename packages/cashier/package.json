@@ -1,17 +1,17 @@
 {
-  "name": "@aios-medical/cashier",
+  "name": "@aios-inc/cashier",
   "version": "0.0.0-development",
   "description": "Unified subscription billing for Node.js and TypeScript. One API across payment providers, with typed errors and NestJS support.",
   "license": "MIT",
   "author": "AIOS",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fellahealth/cashier.git",
+    "url": "git+https://github.com/aios-inc/cashier.git",
     "directory": "packages/cashier"
   },
-  "homepage": "https://github.com/fellahealth/cashier#readme",
+  "homepage": "https://github.com/aios-inc/cashier#readme",
   "bugs": {
-    "url": "https://github.com/fellahealth/cashier/issues"
+    "url": "https://github.com/aios-inc/cashier/issues"
   },
   "keywords": [
     "billing",

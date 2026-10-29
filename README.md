@@ -1,16 +1,18 @@
 # Cashier
 
-[![npm](https://img.shields.io/npm/v/@aios-medical/cashier.svg)](https://www.npmjs.com/package/@aios-medical/cashier)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/fellahealth/cashier/blob/main/LICENSE)
+[![npm](https://img.shields.io/npm/v/@aios-inc/cashier.svg)](https://www.npmjs.com/package/@aios-inc/cashier)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/aios-inc/cashier/blob/main/LICENSE)
 
 Unified subscription billing for Node.js and TypeScript. One API for every payment provider, with typed errors. Stripe and Recurly are supported today.
 
+> Cashier moved from `@aios-medical` to `@aios-inc`. If you installed `@aios-medical/cashier`, `@aios-medical/cashier-express` or `@aios-medical/cashier-nestjs`, switch to the `@aios-inc` package with the same name and update your imports. The API is unchanged.
+
 ```bash
-npm install @aios-medical/cashier stripe recurly
+npm install @aios-inc/cashier stripe recurly
 ```
 
 ```ts
-import { CashierProvider, createCashier } from '@aios-medical/cashier';
+import { CashierProvider, createCashier } from '@aios-inc/cashier';
 
 const cashier = createCashier({
   default: CashierProvider.Stripe,
@@ -47,21 +49,21 @@ To switch providers, change `default`. Your billing code stays the same. Use `ca
 
 ## Packages
 
-- [`@aios-medical/cashier`](https://www.npmjs.com/package/@aios-medical/cashier): the core library
-- [`@aios-medical/cashier-nestjs`](https://github.com/fellahealth/cashier/tree/main/packages/nestjs#readme): NestJS module
-- [`@aios-medical/cashier-express`](https://github.com/fellahealth/cashier/tree/main/packages/express#readme): Express middleware
+- [`@aios-inc/cashier`](https://www.npmjs.com/package/@aios-inc/cashier): the core library
+- [`@aios-inc/cashier-nestjs`](https://github.com/aios-inc/cashier/tree/main/packages/nestjs#readme): NestJS module
+- [`@aios-inc/cashier-express`](https://github.com/aios-inc/cashier/tree/main/packages/express#readme): Express middleware
 
 ## Documentation
 
-- [API reference](https://github.com/fellahealth/cashier/blob/main/docs/README.md#api-reference): customers, invoices, payments, products, prices and subscriptions
-- [TypeScript](https://github.com/fellahealth/cashier/blob/main/docs/typescript.md), [NestJS](https://github.com/fellahealth/cashier/blob/main/docs/nestjs.md), [Express](https://github.com/fellahealth/cashier/blob/main/docs/express.md)
-- [Drivers and conventions](https://github.com/fellahealth/cashier/blob/main/docs/drivers.md)
-- [Errors](https://github.com/fellahealth/cashier/blob/main/docs/errors.md)
+- [API reference](https://github.com/aios-inc/cashier/blob/main/docs/README.md#api-reference): customers, invoices, payments, products, prices and subscriptions
+- [TypeScript](https://github.com/aios-inc/cashier/blob/main/docs/typescript.md), [NestJS](https://github.com/aios-inc/cashier/blob/main/docs/nestjs.md), [Express](https://github.com/aios-inc/cashier/blob/main/docs/express.md)
+- [Drivers and conventions](https://github.com/aios-inc/cashier/blob/main/docs/drivers.md)
+- [Errors](https://github.com/aios-inc/cashier/blob/main/docs/errors.md)
 
 ## Contributing
 
-See [CONTRIBUTING.md](https://github.com/fellahealth/cashier/blob/main/CONTRIBUTING.md) and [SECURITY.md](https://github.com/fellahealth/cashier/blob/main/SECURITY.md).
+See [CONTRIBUTING.md](https://github.com/aios-inc/cashier/blob/main/CONTRIBUTING.md) and [SECURITY.md](https://github.com/aios-inc/cashier/blob/main/SECURITY.md).
 
 ## License
 
-[MIT](https://github.com/fellahealth/cashier/blob/main/LICENSE) © AIOS
+[MIT](https://github.com/aios-inc/cashier/blob/main/LICENSE) © AIOS

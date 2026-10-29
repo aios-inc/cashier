@@ -7,7 +7,7 @@ if (!version) {
   throw new Error('Usage: node scripts/set-version.mjs <version>');
 }
 
-const INTERNAL_SCOPE = '@aios-medical/';
+const INTERNAL_SCOPE = '@aios-inc/';
 const DEPENDENCY_FIELDS = ['dependencies', 'peerDependencies'];
 
 for (const directory of readdirSync('packages')) {

@@ -1,11 +1,7 @@
 import 'reflect-metadata';
 import { Inject, Injectable, Module } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import {
-  Cashier,
-  CashierProvider,
-  ValidationError,
-} from '@aios-medical/cashier';
+import { Cashier, CashierProvider, ValidationError } from '@aios-inc/cashier';
 import { CashierModule, CashierService } from '../src';
 
 const STRIPE_KEY = 'sk_test_nestjs';

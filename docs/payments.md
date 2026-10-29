@@ -99,7 +99,7 @@ A declined payment rejects with `PaymentFailedError` or `PaymentMethodError` on 
 Refunds a payment, in full or in part, and returns the refund.
 
 ```ts
-import { RefundReason } from '@aios-medical/cashier';
+import { RefundReason } from '@aios-inc/cashier';
 
 const refund = await driver.payments.refund('pi_123');
 
