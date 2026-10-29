@@ -5,8 +5,6 @@
 
 Unified subscription billing for Node.js and TypeScript. One API for every payment provider, with typed errors. Stripe and Recurly are supported today.
 
-> Cashier moved from `@aios-medical` to `@aios-inc`. If you installed `@aios-medical/cashier`, `@aios-medical/cashier-express` or `@aios-medical/cashier-nestjs`, switch to the `@aios-inc` package with the same name and update your imports. The API is unchanged.
-
 ```bash
 npm install @aios-inc/cashier stripe recurly
 ```
