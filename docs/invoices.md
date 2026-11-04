@@ -9,6 +9,8 @@
 - [`invoices.create(params)`](#invoicescreateparams)
 - [`invoices.pay(invoiceId, params?)`](#invoicespayinvoiceid-params)
 - [`invoices.void(invoiceId)`](#invoicesvoidinvoiceid)
+- [`invoices.preview(params)`](#invoicespreviewparams)
+- [`invoices.sendReceipt(invoiceId, params?)`](#invoicessendreceiptinvoiceid-params)
 - [The `Invoice` object](#the-invoice-object)
 
 ## `invoices.get(invoiceId, params?)`
@@ -32,26 +34,33 @@ const refunded = await driver.invoices.get('in_123', { with: ['refunds'] });
 
 ## `invoices.list(params)`
 
-Returns a customer's invoices.
+Returns a customer's or a subscription's invoices.
 
 ```ts
 const invoices = await driver.invoices.list({
   customer: 'cus_123',
   status: 'paid',
 });
+
+const subscriptionInvoices = await driver.invoices.list({
+  subscription: 'sub_123',
+});
 ```
 
-| Parameter  | Type                | Description                                                               |
-| ---------- | ------------------- | ------------------------------------------------------------------------- |
-| `customer` | `string`            | Required. The customer id.                                                |
-| `status`   | `'paid'`            | Only return paid invoices.                                                |
-| `limit`    | `number`            | Maximum number of invoices. Defaults to `100`.                            |
-| `with`     | `InvoiceRelation[]` | Relations to load. See [Loading relations](#loading-relations-with-with). |
+| Parameter      | Type                | Description                                                               |
+| -------------- | ------------------- | ------------------------------------------------------------------------- |
+| `customer`     | `string`            | The customer id. Required without `subscription`.                         |
+| `subscription` | `string`            | Only return this subscription's invoices. Required without `customer`.    |
+| `status`       | `'paid'`            | Only return paid invoices.                                                |
+| `limit`        | `number`            | Maximum number of invoices. Defaults to `100`.                            |
+| `with`         | `InvoiceRelation[]` | Relations to load. See [Loading relations](#loading-relations-with-with). |
 
-| Provider | Behavior                                                                            |
-| -------- | ----------------------------------------------------------------------------------- |
-| Stripe   | Returns one page of up to `limit` invoices. The maximum is 100.                     |
-| Recurly  | Reads pages of the account's invoices until `limit` is reached. The maximum is 200. |
+Passing neither `customer` nor `subscription` does not compile, and rejects with `ValidationError` from plain JavaScript.
+
+| Provider | Behavior                                                                                                                                             |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stripe   | Returns one page of up to `limit` invoices, filtered by `customer`, `subscription` or both. The maximum is 100.                                      |
+| Recurly  | Reads pages of the account's invoices, or of the subscription's invoices when `subscription` is given, until `limit` is reached. The maximum is 200. |
 
 ## `invoices.cursorPaginate(params)`
 
@@ -72,30 +81,64 @@ const nextInvoices = await driver.invoices.cursorPaginate({
 });
 ```
 
-| Parameter  | Type                | Description                                                                         |
-| ---------- | ------------------- | ----------------------------------------------------------------------------------- |
-| `customer` | `string`            | Required. The customer id.                                                          |
-| `status`   | `'paid'`            | Only return paid invoices.                                                          |
-| `perPage`  | `number`            | Number of invoices per page. Defaults to `100`.                                     |
-| `cursor`   | `string \| null`    | The `nextCursor` of the previous page. Leave it out, or pass `null`, for the first. |
-| `with`     | `InvoiceRelation[]` | Relations to load. See [Loading relations](#loading-relations-with-with).           |
+| Parameter      | Type                | Description                                                                         |
+| -------------- | ------------------- | ----------------------------------------------------------------------------------- |
+| `customer`     | `string`            | The customer id. Required without `subscription`.                                   |
+| `subscription` | `string`            | Only return this subscription's invoices. Required without `customer`.              |
+| `status`       | `'paid'`            | Only return paid invoices.                                                          |
+| `perPage`      | `number`            | Number of invoices per page. Defaults to `100`.                                     |
+| `cursor`       | `string \| null`    | The `nextCursor` of the previous page. Leave it out, or pass `null`, for the first. |
+| `with`         | `InvoiceRelation[]` | Relations to load. See [Loading relations](#loading-relations-with-with).           |
 
 It returns a `CursorPaginator<Invoice>`. See [Pagination and limits](drivers.md#pagination-and-limits).
 
-| Provider | Behavior                                                                                                           |
-| -------- | ------------------------------------------------------------------------------------------------------------------ |
-| Stripe   | Lists the customer's invoices after the cursor, which is the id of the last invoice. The maximum `perPage` is 100. |
-| Recurly  | Lists the account's invoices with Recurly's own cursor. The maximum `perPage` is 200.                              |
+| Provider | Behavior                                                                                                    |
+| -------- | ----------------------------------------------------------------------------------------------------------- |
+| Stripe   | Lists the invoices after the cursor, which is the id of the last invoice. The maximum `perPage` is 100.     |
+| Recurly  | Lists the account's or the subscription's invoices with Recurly's own cursor. The maximum `perPage` is 200. |
 
 ## Loading relations with `with`
 
 `get`, `list` and `cursorPaginate` take `with`, like [payments](payments.md#loading-relations-with-with). The relations each provider supports are typed in `CashierInvoiceRelations`.
 
-| Relation  | Adds             | Stripe           | Recurly       |
-| --------- | ---------------- | ---------------- | ------------- |
-| `refunds` | `amountRefunded` | Expands `charge` | No extra cost |
+| Relation          | Adds              | Stripe                                                                      | Recurly                                                                |
+| ----------------- | ----------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `refunds`         | `amountRefunded`  | Expands `charge`                                                            | No extra cost                                                          |
+| `lineItems`       | `lineItems`       | No extra cost for up to 10 lines. One more request per 100 lines after that | No extra cost, unless Recurly reports more line items than it returned |
+| `payments`        | `payments`        | Expands `payment_intent`                                                    | No extra cost                                                          |
+| `startingBalance` | `startingBalance` | No extra cost                                                               | Not available                                                          |
+| `timeline`        | `timeline`        | No extra cost                                                               | No extra cost                                                          |
 
-`amountRefunded` is in minor units: the charge's `amount_refunded` on Stripe, and `paid` minus `refundableAmount` on Recurly charge invoices (`0` on other invoices).
+| Driver                                              | Accepted relations                                                                    |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `cashier.use(CashierProvider.Stripe)`               | `refunds`, `lineItems`, `payments`, `startingBalance`, `timeline`                     |
+| `cashier.use(CashierProvider.Recurly)`              | `refunds`, `lineItems`, `payments`, `timeline`                                        |
+| `cashier.use()`, or `use(provider)` with a variable | The relations every provider supports: `refunds`, `lineItems`, `payments`, `timeline` |
+
+| Field             | Type                | Stripe                                                                                                     | Recurly                                                                          |
+| ----------------- | ------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `amountRefunded`  | `number`            | The charge's `amount_refunded`                                                                             | `paid` minus `refundableAmount` on charge invoices, `0` on other invoices        |
+| `lineItems`       | `InvoiceLineItem[]` | The invoice's `lines`                                                                                      | The invoice's line items                                                         |
+| `payments`        | `Payment[]`         | The invoice's PaymentIntent, or an empty array. With API version `2023-08-16`, an invoice has at most one. | The invoice's `purchase` and `capture` transactions                              |
+| `startingBalance` | `number`            | `starting_balance`: the customer balance applied to the invoice. Negative is credit.                       |                                                                                  |
+| `timeline`        | `InvoiceEvent[]`    | `created`, then `finalized`, `paid`, `voided` and `uncollectible` from `status_transitions`                | `created`, then `paid`, `failed` or `voided` at `closed_at` for a closed invoice |
+
+Amounts are in minor units. `timeline` is oldest first. Each `InvoiceEvent` has a `type` and the date it happened `at`.
+
+### The `InvoiceLineItem` object
+
+| Field            | Type             | Description                                                                   |
+| ---------------- | ---------------- | ----------------------------------------------------------------------------- |
+| `id`             | `string`         | The provider's line item id.                                                  |
+| `description`    | `string \| null` | What the line is for.                                                         |
+| `amount`         | `number`         | In minor units. Negative for credits, such as the unused time of a proration. |
+| `quantity`       | `number \| null` | The quantity.                                                                 |
+| `unitAmount`     | `number \| null` | The price per unit, in minor units.                                           |
+| `priceId`        | `string \| null` | The Stripe price id or the Recurly plan id.                                   |
+| `subscriptionId` | `string \| null` | The subscription the line bills.                                              |
+| `periodStart`    | `Date \| null`   | Start of the period the line covers.                                          |
+| `periodEnd`      | `Date \| null`   | End of the period the line covers.                                            |
+| `proration`      | `boolean`        | `true` for a proration. On Recurly, a line whose `proration_rate` is not 1.   |
 
 ## `invoices.create(params)`
 
@@ -188,26 +231,91 @@ Voids an invoice and returns it.
 const invoice = await driver.invoices.void('in_123');
 ```
 
+## `invoices.preview(params)`
+
+Returns the next invoice of a subscription without creating it: what the customer will be charged next, or what a change of price or quantity would cost. This is Laravel Cashier's `upcomingInvoice` and `previewInvoice`.
+
+```ts
+const next = await driver.invoices.preview({ subscription: 'sub_123' });
+
+next.total;
+next.nextPaymentAt;
+
+const change = await driver.invoices.preview({
+  subscription: 'sub_123',
+  price: 'price_premium',
+  proration: 'prorate',
+});
+```
+
+| Parameter      | Type                    | Description                                                                                                                  |
+| -------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `subscription` | `string`                | Required. The subscription id.                                                                                               |
+| `price`        | `string`                | Preview a change to this price. A Recurly plan id, or plan code with the `code-` prefix.                                     |
+| `quantity`     | `number`                | Preview a change to this quantity.                                                                                           |
+| `proration`    | `SubscriptionProration` | How the change would be prorated, as in [`subscriptions.update`](subscriptions.md#subscriptionsupdatesubscriptionid-params). |
+
+| Provider | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Stripe   | Retrieves the upcoming invoice of the subscription, with the change applied to its only item and `subscription_proration_behavior` set from `proration`. Changing the price or quantity of a subscription with several items rejects with `ValidationError`. Reads every line, 100 at a time after the first 10.                                                                                                                                                   |
+| Recurly  | Recurly has no upcoming invoice. Without a change, the preview is estimated from the subscription: its `subtotal`, `tax` and `total`, one line for the plan and one for each add-on, charged at the end of the current period. With a change, Cashier previews the subscription change: when Recurly would invoice right away, the preview is that invoice. Otherwise it is estimated from the change, with `tax` set to `0` because Recurly does not estimate it. |
+
+### The `InvoicePreview` object
+
+| Field            | Type                | Description                                                                                                                                     |
+| ---------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `customerId`     | `string \| null`    | The customer or account id.                                                                                                                     |
+| `subscriptionId` | `string`            | The subscription id.                                                                                                                            |
+| `currency`       | `string`            | Uppercase ISO 4217 code.                                                                                                                        |
+| `subtotal`       | `number`            | In minor units.                                                                                                                                 |
+| `tax`            | `number`            | In minor units.                                                                                                                                 |
+| `total`          | `number`            | In minor units.                                                                                                                                 |
+| `amountDue`      | `number`            | What will be charged, in minor units, after any customer balance or credit.                                                                     |
+| `lineItems`      | `InvoiceLineItem[]` | See [The `InvoiceLineItem` object](#the-invoicelineitem-object).                                                                                |
+| `nextPaymentAt`  | `Date \| null`      | When it will be charged: Stripe's `next_payment_attempt`, or on Recurly the end of the current period, or the due date of an immediate invoice. |
+| `provider`       | `CashierProvider`   | The provider it came from.                                                                                                                      |
+
+## `invoices.sendReceipt(invoiceId, params?)`
+
+Emails the customer the receipt of a paid invoice. Only the Stripe driver has it.
+
+```ts
+await cashier.use(CashierProvider.Stripe).invoices.sendReceipt('in_123');
+```
+
+| Parameter | Type     | Description                                                   |
+| --------- | -------- | ------------------------------------------------------------- |
+| `email`   | `string` | Where to send it. Defaults to the invoice's `customer_email`. |
+
+| Provider | Behavior                                                                                                                                                                       |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Stripe   | Sets `receipt_email` on the invoice's charge, which makes Stripe send the receipt. Stripe does not send receipts in test mode.                                                 |
+| Recurly  | Not available. Recurly's API cannot send a receipt, so `sendReceipt` does not compile on the Recurly driver. See [Provider-only methods](typescript.md#provider-only-methods). |
+
+An invoice that is not paid, or that has no email to send to, rejects with `ValidationError`.
+
 ## The `Invoice` object
 
-| Field              | Type              | Description                                                         |
-| ------------------ | ----------------- | ------------------------------------------------------------------- |
-| `id`               | `string`          | The provider's id.                                                  |
-| `number`           | `string \| null`  | The invoice number.                                                 |
-| `customerId`       | `string \| null`  | The customer or account id.                                         |
-| `subscriptionIds`  | `string[]`        | Subscriptions billed on this invoice.                               |
-| `billingReason`    | `string \| null`  | Stripe `billing_reason` or Recurly `origin`, for example `renewal`. |
-| `status`           | `InvoiceStatus`   | See below.                                                          |
-| `currency`         | `string`          | Uppercase ISO 4217 code.                                            |
-| `subtotal`         | `number`          | In minor units.                                                     |
-| `tax`              | `number`          | In minor units. `0` when there is no tax.                           |
-| `total`            | `number`          | In minor units.                                                     |
-| `attemptCount`     | `number`          | How many times payment was attempted.                               |
-| `hostedInvoiceUrl` | `string \| null`  | The provider's hosted invoice page, when it has one.                |
-| `createdAt`        | `Date`            | When the invoice was created.                                       |
-| `dueDate`          | `Date \| null`    | When the invoice is due.                                            |
-| `paidAt`           | `Date \| null`    | When the invoice was paid.                                          |
-| `provider`         | `CashierProvider` | The provider it came from.                                          |
+| Field              | Type              | Description                                                                          |
+| ------------------ | ----------------- | ------------------------------------------------------------------------------------ |
+| `id`               | `string`          | The provider's id.                                                                   |
+| `number`           | `string \| null`  | The invoice number.                                                                  |
+| `customerId`       | `string \| null`  | The customer or account id.                                                          |
+| `subscriptionIds`  | `string[]`        | Subscriptions billed on this invoice.                                                |
+| `billingReason`    | `string \| null`  | Stripe `billing_reason` or Recurly `origin`, for example `renewal`.                  |
+| `status`           | `InvoiceStatus`   | See below.                                                                           |
+| `currency`         | `string`          | Uppercase ISO 4217 code.                                                             |
+| `subtotal`         | `number`          | In minor units.                                                                      |
+| `tax`              | `number`          | In minor units. `0` when there is no tax.                                            |
+| `total`            | `number`          | In minor units.                                                                      |
+| `amountPaid`       | `number`          | In minor units. Stripe's `amount_paid`, Recurly's `paid`.                            |
+| `amountRemaining`  | `number`          | What is still due, in minor units. Stripe's `amount_remaining`, Recurly's `balance`. |
+| `attemptCount`     | `number`          | How many times payment was attempted.                                                |
+| `hostedInvoiceUrl` | `string \| null`  | The provider's hosted invoice page, when it has one.                                 |
+| `createdAt`        | `Date`            | When the invoice was created.                                                        |
+| `dueDate`          | `Date \| null`    | When the invoice is due.                                                             |
+| `paidAt`           | `Date \| null`    | When the invoice was paid.                                                           |
+| `provider`         | `CashierProvider` | The provider it came from.                                                           |
 
 | Field              | Stripe               | Recurly       |
 | ------------------ | -------------------- | ------------- |
