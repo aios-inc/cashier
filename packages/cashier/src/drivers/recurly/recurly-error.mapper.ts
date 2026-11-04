@@ -12,7 +12,10 @@ import { RateLimitError } from '../../errors/rate-limit.error';
 import { SubscriptionError } from '../../errors/subscription.error';
 import { UnsupportedOperationError } from '../../errors/unsupported-operation.error';
 import { ValidationError } from '../../errors/validation.error';
-import { RECURLY_PAYMENT_METHOD_ERROR_CODES } from '../../constants/cashier.constants';
+import {
+  RECURLY_PAYMENT_METHOD_ERROR_CODES,
+  RECURLY_PAYMENT_METHOD_PARAMS,
+} from '../../constants/cashier.constants';
 import {
   createErrorFromHttpStatus,
   getErrorMessage,
@@ -23,11 +26,18 @@ type RecurlyApiError = recurly.ApiError & {
   transactionError?: recurly.TransactionError | null;
 };
 
+type RecurlyErrorParam = { param?: string };
+
 const getProviderStatus = (error: RecurlyApiError): number | undefined => {
   const response = error.getResponse?.() as { status?: number } | undefined;
 
   return response?.status;
 };
+
+const isPaymentMethodParamError = (error: RecurlyApiError): boolean =>
+  ((error.params ?? []) as RecurlyErrorParam[]).some(({ param }) =>
+    RECURLY_PAYMENT_METHOD_PARAMS.has(param ?? ''),
+  );
 
 const mapRecurlyTransactionError = (
   error: RecurlyApiError,
@@ -96,7 +106,9 @@ export const mapRecurlyError = (error: unknown): CashierError => {
     error instanceof recurly.errors.BadRequestError ||
     error instanceof recurly.errors.UnprocessableEntityError
   ) {
-    return new ValidationError(message, details);
+    return isPaymentMethodParamError(apiError)
+      ? new PaymentMethodError(message, details)
+      : new ValidationError(message, details);
   }
 
   if (error instanceof recurly.errors.UnauthorizedError) {

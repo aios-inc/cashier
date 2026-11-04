@@ -18,6 +18,7 @@ import {
   RECURLY_SUBSCRIPTION_RELATIONS,
   RECURLY_SUBSCRIPTION_STATE_FILTERS,
 } from '../../../constants/cashier.constants';
+import { ProviderError } from '../../../errors/provider.error';
 import { UnsupportedOperationError } from '../../../errors/unsupported-operation.error';
 import { ValidationError } from '../../../errors/validation.error';
 import { resolveRelations } from '../../../utils/relations.utils';
@@ -26,6 +27,7 @@ import {
   mapRecurlySubscriptionStatus,
   toRecurlyCustomFields,
 } from '../mappers/recurly-subscription.mapper';
+import { getRecurlyBillingInfo } from '../recurly-billing-info';
 import {
   RECURLY_CODE_PREFIX,
   toRecurlyPlanReference,
@@ -156,9 +158,13 @@ export class RecurlySubscriptionsResource implements SubscriptionsResource<Cashi
 
   update(
     subscriptionId: string,
-    { price, quantity, metadata }: UpdateSubscriptionParams,
+    { price, quantity, paymentMethod, metadata }: UpdateSubscriptionParams,
   ): Promise<Subscription> {
     return recurlyRequest(async () => {
+      if (paymentMethod) {
+        await this.getBillingInfo(subscriptionId, paymentMethod);
+      }
+
       if (price !== undefined || quantity !== undefined) {
         await this.client.createSubscriptionChange(subscriptionId, {
           timeframe: 'now',
@@ -167,9 +173,12 @@ export class RecurlySubscriptionsResource implements SubscriptionsResource<Cashi
         });
       }
 
-      if (metadata) {
+      if (metadata || paymentMethod) {
         await this.client.updateSubscription(subscriptionId, {
-          customFields: toRecurlyCustomFields(metadata),
+          ...(paymentMethod ? { billingInfoId: paymentMethod } : {}),
+          ...(metadata
+            ? { customFields: toRecurlyCustomFields(metadata) }
+            : {}),
         });
       }
 
@@ -201,6 +210,22 @@ export class RecurlySubscriptionsResource implements SubscriptionsResource<Cashi
             }),
       );
     });
+  }
+
+  private async getBillingInfo(
+    subscriptionId: string,
+    billingInfoId: string,
+  ): Promise<recurly.BillingInfo> {
+    const { account } = await this.client.getSubscription(subscriptionId);
+
+    if (!account?.id) {
+      throw new ProviderError(
+        `Recurly subscription ${subscriptionId} has no account`,
+        { provider: CashierProvider.Recurly },
+      );
+    }
+
+    return getRecurlyBillingInfo(this.client, account.id, billingInfoId);
   }
 
   private subscriptions(

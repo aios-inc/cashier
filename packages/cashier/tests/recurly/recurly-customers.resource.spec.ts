@@ -1,7 +1,9 @@
 import * as recurly from 'recurly';
 import { RecurlyCustomersResource } from '../../src/drivers/recurly/resources/recurly-customers.resource';
 import { NotFoundError } from '../../src/errors/not-found.error';
+import { PaymentMethodError } from '../../src/errors/payment-method.error';
 import { ValidationError } from '../../src/errors/validation.error';
+import { CashierProvider } from '../../src/types/cashier.types';
 import {
   RECURLY_FIXTURES,
   createRecurlyPager,
@@ -131,6 +133,111 @@ describe('RecurlyCustomersResource', () => {
         },
       );
       expect(customer).toEqual(RECURLY_FIXTURES.EXPECTED_CUSTOMERS[0]);
+    });
+
+    it('should make the billing info the primary payment method without updating the account', async () => {
+      client.getAccount.mockResolvedValue(RECURLY_FIXTURES.FULL_ACCOUNT);
+      client.getABillingInfo.mockResolvedValue({
+        id: RECURLY_FIXTURES.BILLING_INFO_ID,
+        primaryPaymentMethod: false,
+      });
+      client.updateABillingInfo.mockResolvedValue({});
+
+      const customer = await customers.update(RECURLY_FIXTURES.ACCOUNT_ID, {
+        defaultPaymentMethod: RECURLY_FIXTURES.BILLING_INFO_ID,
+      });
+
+      expect(client.getABillingInfo).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.ACCOUNT_ID,
+        RECURLY_FIXTURES.BILLING_INFO_ID,
+      );
+      expect(client.updateABillingInfo).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.ACCOUNT_ID,
+        RECURLY_FIXTURES.BILLING_INFO_ID,
+        { primaryPaymentMethod: true },
+      );
+      expect(client.updateAccount).not.toHaveBeenCalled();
+      expect(customer).toEqual(RECURLY_FIXTURES.EXPECTED_CUSTOMERS[0]);
+    });
+
+    it('should leave a billing info that is already primary unchanged', async () => {
+      client.getAccount.mockResolvedValue(RECURLY_FIXTURES.FULL_ACCOUNT);
+      client.getABillingInfo.mockResolvedValue({
+        id: RECURLY_FIXTURES.BILLING_INFO_ID,
+        primaryPaymentMethod: true,
+      });
+
+      const customer = await customers.update(RECURLY_FIXTURES.ACCOUNT_ID, {
+        defaultPaymentMethod: RECURLY_FIXTURES.BILLING_INFO_ID,
+      });
+
+      expect(client.updateABillingInfo).not.toHaveBeenCalled();
+      expect(customer).toEqual(RECURLY_FIXTURES.EXPECTED_CUSTOMERS[0]);
+    });
+
+    it('should update the account fields and the primary billing info together', async () => {
+      client.getAccount.mockResolvedValue(RECURLY_FIXTURES.FULL_ACCOUNT);
+      client.getABillingInfo.mockResolvedValue({
+        id: RECURLY_FIXTURES.BILLING_INFO_ID,
+        primaryPaymentMethod: false,
+      });
+      client.updateAccount.mockResolvedValue(RECURLY_FIXTURES.FULL_ACCOUNT);
+      client.updateABillingInfo.mockResolvedValue({});
+
+      await customers.update(RECURLY_FIXTURES.ACCOUNT_ID, {
+        email: RECURLY_FIXTURES.CUSTOMER_EMAIL,
+        defaultPaymentMethod: RECURLY_FIXTURES.BILLING_INFO_ID,
+      });
+
+      expect(client.updateAccount).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.ACCOUNT_ID,
+        { email: RECURLY_FIXTURES.CUSTOMER_EMAIL },
+      );
+      expect(client.updateABillingInfo).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.ACCOUNT_ID,
+        RECURLY_FIXTURES.BILLING_INFO_ID,
+        { primaryPaymentMethod: true },
+      );
+    });
+
+    it('should reject a billing info that is not on the account with PaymentMethodError, before any write', async () => {
+      client.getAccount.mockResolvedValue(RECURLY_FIXTURES.FULL_ACCOUNT);
+      client.getABillingInfo.mockRejectedValue(
+        withRecurlyStatus(
+          new recurly.errors.NotFoundError('Not found', 'not_found', {}),
+          404,
+        ),
+      );
+
+      await expect(
+        customers.update(RECURLY_FIXTURES.ACCOUNT_ID, {
+          email: RECURLY_FIXTURES.CUSTOMER_EMAIL,
+          defaultPaymentMethod: RECURLY_FIXTURES.BILLING_INFO_ID,
+        }),
+      ).rejects.toMatchObject({
+        constructor: PaymentMethodError,
+        provider: CashierProvider.Recurly,
+        providerStatus: 404,
+        providerCode: 'not_found',
+      });
+      expect(client.updateAccount).not.toHaveBeenCalled();
+      expect(client.updateABillingInfo).not.toHaveBeenCalled();
+    });
+
+    it('should keep a missing account as NotFoundError', async () => {
+      client.getAccount.mockRejectedValue(
+        withRecurlyStatus(
+          new recurly.errors.NotFoundError('Not found', 'not_found', {}),
+          404,
+        ),
+      );
+
+      await expect(
+        customers.update(RECURLY_FIXTURES.ACCOUNT_ID, {
+          defaultPaymentMethod: RECURLY_FIXTURES.BILLING_INFO_ID,
+        }),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      expect(client.getABillingInfo).not.toHaveBeenCalled();
     });
   });
 });

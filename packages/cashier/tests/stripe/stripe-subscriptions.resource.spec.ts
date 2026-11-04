@@ -1,5 +1,6 @@
 import { StripeSubscriptionsResource } from '../../src/drivers/stripe/resources/stripe-subscriptions.resource';
 import { NotFoundError } from '../../src/errors/not-found.error';
+import { PaymentMethodError } from '../../src/errors/payment-method.error';
 import { UnsupportedOperationError } from '../../src/errors/unsupported-operation.error';
 import { ValidationError } from '../../src/errors/validation.error';
 import { CashierProvider } from '../../src/types/cashier.types';
@@ -8,6 +9,7 @@ import {
   StripeClientMock,
   asStripeClient,
   createStripeClientMock,
+  createStripeMissingPaymentMethodError,
   createStripeMissingResourceError,
 } from '../fixtures/stripe-client.mock';
 
@@ -525,6 +527,84 @@ describe('StripeSubscriptionsResource', () => {
         }),
       ).rejects.toBeInstanceOf(ValidationError);
       expect(client.subscriptions.update).not.toHaveBeenCalled();
+    });
+
+    it('should set the subscription default payment method without reading the items', async () => {
+      client.subscriptions.update.mockResolvedValue(
+        STRIPE_FIXTURES.SUBSCRIPTION,
+      );
+
+      const subscription = await subscriptions.update(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        { paymentMethod: STRIPE_FIXTURES.PAYMENT_METHOD_ID },
+      );
+
+      expect(client.subscriptions.retrieve).not.toHaveBeenCalled();
+      expect(client.subscriptions.update).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        { default_payment_method: STRIPE_FIXTURES.PAYMENT_METHOD_ID },
+      );
+      expect(subscription).toEqual(STRIPE_FIXTURES.EXPECTED_SUBSCRIPTION);
+    });
+
+    it('should change the payment method of a multi-item subscription', async () => {
+      client.subscriptions.retrieve.mockResolvedValue(
+        STRIPE_FIXTURES.MULTI_ITEM_SUBSCRIPTION,
+      );
+      client.subscriptions.update.mockResolvedValue(
+        STRIPE_FIXTURES.MULTI_ITEM_SUBSCRIPTION,
+      );
+
+      await subscriptions.update(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+        paymentMethod: STRIPE_FIXTURES.PAYMENT_METHOD_ID,
+        metadata: { source: 'admin' },
+      });
+
+      expect(client.subscriptions.retrieve).not.toHaveBeenCalled();
+      expect(client.subscriptions.update).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        {
+          default_payment_method: STRIPE_FIXTURES.PAYMENT_METHOD_ID,
+          metadata: { source: 'admin' },
+        },
+      );
+    });
+
+    it('should change the price and the payment method in one request', async () => {
+      client.subscriptions.retrieve.mockResolvedValue(
+        STRIPE_FIXTURES.SUBSCRIPTION,
+      );
+      client.subscriptions.update.mockResolvedValue(
+        STRIPE_FIXTURES.SUBSCRIPTION,
+      );
+
+      await subscriptions.update(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+        price: STRIPE_FIXTURES.NEW_PRICE_ID,
+        paymentMethod: STRIPE_FIXTURES.PAYMENT_METHOD_ID,
+      });
+
+      expect(client.subscriptions.update).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        {
+          items: [{ id: 'si_123', price: STRIPE_FIXTURES.NEW_PRICE_ID }],
+          default_payment_method: STRIPE_FIXTURES.PAYMENT_METHOD_ID,
+        },
+      );
+    });
+
+    it('should map a payment method that is not attached to the customer to PaymentMethodError', async () => {
+      client.subscriptions.update.mockRejectedValue(
+        createStripeMissingPaymentMethodError('default_payment_method'),
+      );
+
+      await expect(
+        subscriptions.update(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+          paymentMethod: STRIPE_FIXTURES.PAYMENT_METHOD_ID,
+        }),
+      ).rejects.toMatchObject({
+        constructor: PaymentMethodError,
+        provider: CashierProvider.Stripe,
+      });
     });
   });
 

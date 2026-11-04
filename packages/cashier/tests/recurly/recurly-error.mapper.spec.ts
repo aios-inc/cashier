@@ -81,6 +81,13 @@ describe('mapRecurlyError', () => {
       ValidationError,
     ],
     [
+      'a validation failure on billing_info_id',
+      new recurly.errors.ValidationError('Invalid', 'validation', {
+        params: [{ param: 'billing_info_id', message: 'is invalid' }],
+      }),
+      PaymentMethodError,
+    ],
+    [
       'a bad request',
       new recurly.errors.BadRequestError('Bad', 'bad_request', {}),
       ValidationError,

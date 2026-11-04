@@ -68,7 +68,13 @@ export class StripeCustomersResource implements CustomersResource {
 
   update(
     customerId: string,
-    { email, firstName, lastName, metadata }: UpdateCustomerParams,
+    {
+      email,
+      firstName,
+      lastName,
+      metadata,
+      defaultPaymentMethod,
+    }: UpdateCustomerParams,
   ): Promise<Customer> {
     if ((firstName === undefined) !== (lastName === undefined)) {
       return Promise.reject(
@@ -87,6 +93,13 @@ export class StripeCustomersResource implements CustomersResource {
           ...(email ? { email } : {}),
           ...(name ? { name } : {}),
           ...(metadata ? { metadata } : {}),
+          ...(defaultPaymentMethod
+            ? {
+                invoice_settings: {
+                  default_payment_method: defaultPaymentMethod,
+                },
+              }
+            : {}),
         }),
       ),
     );

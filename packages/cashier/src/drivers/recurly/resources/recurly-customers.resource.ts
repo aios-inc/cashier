@@ -11,6 +11,7 @@ import { DEFAULT_LIST_LIMIT } from '../../../constants/cashier.constants';
 import { ValidationError } from '../../../errors/validation.error';
 import { mapRecurlyAccount } from '../mappers/recurly-account.mapper';
 import { toRecurlyCustomFields } from '../mappers/recurly-subscription.mapper';
+import { getRecurlyBillingInfo } from '../recurly-billing-info';
 import { recurlyRequest } from '../recurly-request';
 
 export class RecurlyCustomersResource implements CustomersResource {
@@ -75,19 +76,46 @@ export class RecurlyCustomersResource implements CustomersResource {
 
   update(
     customerId: string,
-    { email, firstName, lastName, metadata }: UpdateCustomerParams,
+    {
+      email,
+      firstName,
+      lastName,
+      metadata,
+      defaultPaymentMethod,
+    }: UpdateCustomerParams,
   ): Promise<Customer> {
-    return recurlyRequest(async () =>
-      mapRecurlyAccount(
-        await this.client.updateAccount(customerId, {
-          ...(email ? { email } : {}),
-          ...(firstName !== undefined ? { firstName } : {}),
-          ...(lastName !== undefined ? { lastName } : {}),
-          ...(metadata
-            ? { customFields: toRecurlyCustomFields(metadata) }
-            : {}),
-        }),
-      ),
-    );
+    const changes: recurly.AccountUpdate = {
+      ...(email ? { email } : {}),
+      ...(firstName !== undefined ? { firstName } : {}),
+      ...(lastName !== undefined ? { lastName } : {}),
+      ...(metadata ? { customFields: toRecurlyCustomFields(metadata) } : {}),
+    };
+
+    if (!defaultPaymentMethod) {
+      return recurlyRequest(async () =>
+        mapRecurlyAccount(await this.client.updateAccount(customerId, changes)),
+      );
+    }
+
+    return recurlyRequest(async () => {
+      let account = await this.client.getAccount(customerId);
+      const billingInfo = await getRecurlyBillingInfo(
+        this.client,
+        customerId,
+        defaultPaymentMethod,
+      );
+
+      if (Object.keys(changes).length > 0) {
+        account = await this.client.updateAccount(customerId, changes);
+      }
+
+      if (!billingInfo.primaryPaymentMethod) {
+        await this.client.updateABillingInfo(customerId, defaultPaymentMethod, {
+          primaryPaymentMethod: true,
+        });
+      }
+
+      return mapRecurlyAccount(account);
+    });
   }
 }

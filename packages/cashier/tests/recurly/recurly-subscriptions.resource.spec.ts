@@ -1,4 +1,6 @@
+import * as recurly from 'recurly';
 import { RecurlySubscriptionsResource } from '../../src/drivers/recurly/resources/recurly-subscriptions.resource';
+import { PaymentMethodError } from '../../src/errors/payment-method.error';
 import { ProviderError } from '../../src/errors/provider.error';
 import { UnsupportedOperationError } from '../../src/errors/unsupported-operation.error';
 import { ValidationError } from '../../src/errors/validation.error';
@@ -8,6 +10,7 @@ import {
   createFailingRecurlyPager,
   createRecurlyPagePager,
   createRecurlyPager,
+  withRecurlyStatus,
 } from '../fixtures/recurly.fixtures';
 import {
   RecurlyClientMock,
@@ -628,6 +631,107 @@ describe('RecurlySubscriptionsResource', () => {
         RECURLY_FIXTURES.SUBSCRIPTION_ID,
         { customFields: [{ name: 'source', value: 'admin' }] },
       );
+    });
+
+    it('should assign a billing info from the subscription account without a plan change', async () => {
+      client.getSubscription.mockResolvedValue(
+        RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+      );
+      client.getABillingInfo.mockResolvedValue({
+        id: RECURLY_FIXTURES.BILLING_INFO_ID,
+      });
+      client.updateSubscription.mockResolvedValue({});
+
+      const subscription = await subscriptions.update(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        { paymentMethod: RECURLY_FIXTURES.BILLING_INFO_ID },
+      );
+
+      expect(client.getABillingInfo).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.ACCOUNT_ID,
+        RECURLY_FIXTURES.BILLING_INFO_ID,
+      );
+      expect(client.createSubscriptionChange).not.toHaveBeenCalled();
+      expect(client.updateSubscription).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        { billingInfoId: RECURLY_FIXTURES.BILLING_INFO_ID },
+      );
+      expect(subscription).toEqual(
+        RECURLY_FIXTURES.EXPECTED_ACTIVE_SUBSCRIPTION,
+      );
+    });
+
+    it('should save the billing info and metadata in one update', async () => {
+      client.getSubscription.mockResolvedValue(
+        RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+      );
+      client.getABillingInfo.mockResolvedValue({
+        id: RECURLY_FIXTURES.BILLING_INFO_ID,
+      });
+      client.updateSubscription.mockResolvedValue({});
+
+      await subscriptions.update(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
+        paymentMethod: RECURLY_FIXTURES.BILLING_INFO_ID,
+        metadata: { source: 'admin' },
+      });
+
+      expect(client.updateSubscription).toHaveBeenCalledTimes(1);
+      expect(client.updateSubscription).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        {
+          billingInfoId: RECURLY_FIXTURES.BILLING_INFO_ID,
+          customFields: [{ name: 'source', value: 'admin' }],
+        },
+      );
+    });
+
+    it('should reject a billing info that is not on the subscription account with PaymentMethodError, before any write', async () => {
+      client.getSubscription.mockResolvedValue(
+        RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+      );
+      client.getABillingInfo.mockRejectedValue(
+        withRecurlyStatus(
+          new recurly.errors.NotFoundError('Not found', 'not_found', {}),
+          404,
+        ),
+      );
+
+      await expect(
+        subscriptions.update(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
+          price: RECURLY_FIXTURES.PLAN_CODE_REFERENCE,
+          paymentMethod: RECURLY_FIXTURES.BILLING_INFO_ID,
+        }),
+      ).rejects.toMatchObject({
+        constructor: PaymentMethodError,
+        provider: CashierProvider.Recurly,
+      });
+      expect(client.createSubscriptionChange).not.toHaveBeenCalled();
+      expect(client.updateSubscription).not.toHaveBeenCalled();
+    });
+
+    it('should map a Recurly billing_info_id validation error to PaymentMethodError', async () => {
+      client.getSubscription.mockResolvedValue(
+        RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+      );
+      client.getABillingInfo.mockResolvedValue({
+        id: RECURLY_FIXTURES.BILLING_INFO_ID,
+      });
+      client.updateSubscription.mockRejectedValue(
+        withRecurlyStatus(
+          new recurly.errors.ValidationError(
+            'Billing info is invalid',
+            'validation',
+            { params: [{ param: 'billing_info_id', message: 'is invalid' }] },
+          ),
+          422,
+        ),
+      );
+
+      await expect(
+        subscriptions.update(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
+          paymentMethod: RECURLY_FIXTURES.BILLING_INFO_ID,
+        }),
+      ).rejects.toBeInstanceOf(PaymentMethodError);
     });
   });
 

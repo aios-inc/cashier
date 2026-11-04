@@ -119,6 +119,7 @@ export interface CreateSubscriptionParams {
 export interface UpdateSubscriptionParams {
   price?: string;
   quantity?: number;
+  paymentMethod?: string;
   metadata?: Record<string, string>;
 }
 

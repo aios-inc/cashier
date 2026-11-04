@@ -54,3 +54,13 @@ export const createStripeMissingResourceError = () =>
     message: 'No such resource',
     statusCode: 404,
   } as Stripe.StripeRawError);
+
+export const createStripeMissingPaymentMethodError = (param: string) =>
+  new Stripe.errors.StripeInvalidRequestError({
+    type: 'invalid_request_error',
+    code: 'resource_missing',
+    param,
+    message:
+      'The customer does not have a payment method with the ID pm_123. The payment method must be attached to the customer.',
+    statusCode: 400,
+  } as Stripe.StripeRawError);

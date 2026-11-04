@@ -28,6 +28,7 @@ export interface UpdateCustomerParams {
   firstName?: string;
   lastName?: string;
   metadata?: Record<string, string>;
+  defaultPaymentMethod?: string;
 }
 
 export interface CustomersResource {

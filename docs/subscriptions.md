@@ -177,25 +177,32 @@ const subscription = await driver.subscriptions.get('sub_123');
 
 ## `subscriptions.update(subscriptionId, params)`
 
-Changes the price, quantity or metadata and returns the updated subscription.
+Changes the price, quantity, payment method or metadata and returns the updated subscription.
 
 ```ts
 const subscription = await driver.subscriptions.update('sub_123', {
   price: 'price_456',
   quantity: 2,
 });
+
+await driver.subscriptions.update('sub_123', { paymentMethod: 'pm_456' });
 ```
 
-| Parameter  | Type                     | Description                                              |
-| ---------- | ------------------------ | -------------------------------------------------------- |
-| `price`    | `string`                 | New Stripe price id, or Recurly plan id or `code-` code. |
-| `quantity` | `number`                 | New quantity.                                            |
-| `metadata` | `Record<string, string>` | Metadata to set.                                         |
+| Parameter       | Type                     | Description                                                                                                        |
+| --------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `price`         | `string`                 | New Stripe price id, or Recurly plan id or `code-` code.                                                           |
+| `quantity`      | `number`                 | New quantity.                                                                                                      |
+| `paymentMethod` | `string`                 | Stripe payment method id or Recurly billing info id to bill for this subscription. It must belong to the customer. |
+| `metadata`      | `Record<string, string>` | Metadata to set.                                                                                                   |
 
-| Provider | Behavior                                                                                                                               |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Stripe   | Replaces the price or quantity of the subscription's only item. A subscription with more than one item rejects with `ValidationError`. |
-| Recurly  | Applies the plan or quantity change right away, then saves `metadata` as custom fields, then reads the subscription again.             |
+| Provider | Behavior                                                                                                                                                                                                                                                                                                   |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stripe   | Replaces the price or quantity of the subscription's only item. A `price` or `quantity` change on a subscription with more than one item rejects with `ValidationError`. `paymentMethod` sets the subscription's `default_payment_method` and works on any subscription, including one with several items. |
+| Recurly  | Checks that the `paymentMethod` billing info belongs to the subscription's account, applies the plan or quantity change right away, then saves `paymentMethod` as `billing_info_id` and `metadata` as custom fields, then reads the subscription again. `paymentMethod` needs the Recurly Wallet feature.  |
+
+`paymentMethod` rejects with `PaymentMethodError` when the payment method does not exist or is not attached to the customer. Nothing is changed in that case.
+
+To change the card for every future invoice of the customer, use [`customers.update`](customers.md#customersupdatecustomerid-params) with `defaultPaymentMethod`.
 
 ## `subscriptions.cancel(subscriptionId, params?)`
 

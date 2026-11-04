@@ -1,11 +1,14 @@
 import { StripeCustomersResource } from '../../src/drivers/stripe/resources/stripe-customers.resource';
 import { NotFoundError } from '../../src/errors/not-found.error';
+import { PaymentMethodError } from '../../src/errors/payment-method.error';
 import { ValidationError } from '../../src/errors/validation.error';
+import { CashierProvider } from '../../src/types/cashier.types';
 import { STRIPE_FIXTURES } from '../fixtures/stripe.fixtures';
 import {
   StripeClientMock,
   asStripeClient,
   createStripeClientMock,
+  createStripeMissingPaymentMethodError,
   createStripeMissingResourceError,
 } from '../fixtures/stripe-client.mock';
 
@@ -142,6 +145,42 @@ describe('StripeCustomersResource', () => {
       ).rejects.toBeInstanceOf(ValidationError);
 
       expect(client.customers.update).not.toHaveBeenCalled();
+    });
+
+    it('should set the default payment method for invoices and renewals', async () => {
+      client.customers.update.mockResolvedValue(STRIPE_FIXTURES.CUSTOMER);
+
+      const customer = await customers.update(STRIPE_FIXTURES.CUSTOMER_ID, {
+        defaultPaymentMethod: STRIPE_FIXTURES.PAYMENT_METHOD_ID,
+      });
+
+      expect(client.customers.update).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.CUSTOMER_ID,
+        {
+          invoice_settings: {
+            default_payment_method: STRIPE_FIXTURES.PAYMENT_METHOD_ID,
+          },
+        },
+      );
+      expect(customer).toEqual(STRIPE_FIXTURES.EXPECTED_CUSTOMER);
+    });
+
+    it('should map a payment method that is not attached to the customer to PaymentMethodError', async () => {
+      client.customers.update.mockRejectedValue(
+        createStripeMissingPaymentMethodError(
+          'invoice_settings[default_payment_method]',
+        ),
+      );
+
+      await expect(
+        customers.update(STRIPE_FIXTURES.CUSTOMER_ID, {
+          defaultPaymentMethod: STRIPE_FIXTURES.PAYMENT_METHOD_ID,
+        }),
+      ).rejects.toMatchObject({
+        constructor: PaymentMethodError,
+        provider: CashierProvider.Stripe,
+        providerCode: 'resource_missing',
+      });
     });
   });
 });

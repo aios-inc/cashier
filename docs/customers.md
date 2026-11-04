@@ -74,19 +74,28 @@ Updates a customer and returns it. Fields you leave out are not changed.
 const customer = await driver.customers.update('cus_123', {
   email: 'jane.doe@example.com',
 });
+
+await driver.customers.update('cus_123', { defaultPaymentMethod: 'pm_456' });
 ```
 
-| Parameter   | Type                     | Description      |
-| ----------- | ------------------------ | ---------------- |
-| `email`     | `string`                 | New email.       |
-| `firstName` | `string`                 | New first name.  |
-| `lastName`  | `string`                 | New last name.   |
-| `metadata`  | `Record<string, string>` | Metadata to set. |
+| Parameter              | Type                     | Description                                                                                              |
+| ---------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `email`                | `string`                 | New email.                                                                                               |
+| `firstName`            | `string`                 | New first name.                                                                                          |
+| `lastName`             | `string`                 | New last name.                                                                                           |
+| `metadata`             | `Record<string, string>` | Metadata to set.                                                                                         |
+| `defaultPaymentMethod` | `string`                 | Stripe payment method id or Recurly billing info id to bill by default. It must belong to this customer. |
 
-| Provider | Behavior                                                                                                                                              |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Stripe   | Stripe stores a single name, so `firstName` and `lastName` must be given together. Otherwise it rejects with `ValidationError` before calling Stripe. |
-| Recurly  | Updates each given field. `metadata` is saved as custom fields.                                                                                       |
+| Provider | Behavior                                                                                                                                                                                                                                                                                                         |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stripe   | Stripe stores a single name, so `firstName` and `lastName` must be given together. Otherwise it rejects with `ValidationError` before calling Stripe. `defaultPaymentMethod` sets `invoice_settings.default_payment_method`.                                                                                     |
+| Recurly  | Updates each given field. `metadata` is saved as custom fields. `defaultPaymentMethod` makes the billing info the account's primary payment method. It is checked against the account before anything is written. If it is already primary, for example because it is the only billing info, nothing is changed. |
+
+`defaultPaymentMethod` rejects with `PaymentMethodError` when the payment method does not exist or is not attached to the customer.
+
+A subscription that has its own payment method keeps billing that one. Stripe charges a subscription's `default_payment_method` before the customer's default. To move an existing subscription to the new card, also call [`subscriptions.update`](subscriptions.md#subscriptionsupdatesubscriptionid-params) with `paymentMethod`.
+
+On Recurly, `defaultPaymentMethod` needs the Wallet feature, which allows more than one billing info per account.
 
 ## The `Customer` object
 

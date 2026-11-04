@@ -107,6 +107,16 @@ export const STRIPE_PAYMENT_METHOD_ERROR_CODES: ReadonlySet<string> = new Set([
   'payment_method_unexpected_state',
 ]);
 
+export const STRIPE_PAYMENT_METHOD_PARAMS: ReadonlySet<string> = new Set([
+  'default_payment_method',
+  'invoice_settings[default_payment_method]',
+  'payment_method',
+]);
+
+export const RECURLY_PAYMENT_METHOD_PARAMS: ReadonlySet<string> = new Set([
+  'billing_info_id',
+]);
+
 export const RECURLY_PAYMENT_METHOD_ERROR_CODES: ReadonlySet<string> = new Set([
   'expired_card',
   'invalid_card_number',
