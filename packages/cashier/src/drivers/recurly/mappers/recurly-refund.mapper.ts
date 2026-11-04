@@ -58,3 +58,21 @@ export const mapRecurlyRefund = (
     provider: CashierProvider.Recurly,
   };
 };
+
+export const mapRecurlyRefundTransaction = (
+  transaction: recurly.Transaction,
+  paymentId: string,
+): Refund => {
+  const currency = (transaction.currency ?? '').toUpperCase();
+
+  return {
+    id: transaction.id ?? '',
+    paymentId,
+    status: RECURLY_REFUND_STATUSES[transaction.status ?? ''] ?? 'unknown',
+    amount: toMinorUnits(Math.abs(transaction.amount ?? 0), currency),
+    currency,
+    reason: null,
+    createdAt: transaction.createdAt ?? new Date(0),
+    provider: CashierProvider.Recurly,
+  };
+};

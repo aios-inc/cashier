@@ -1,5 +1,7 @@
 import { CashierProvider } from './cashier.types';
+import { Invoice } from './invoice.types';
 import { CursorPaginateParams, CursorPaginator } from './pagination.types';
+import { PaymentMethodDetails } from './payment-method.types';
 import { BillingInterval } from './price.types';
 import {
   LoadedRelations,
@@ -39,6 +41,7 @@ export interface Subscription {
   cancelAt: Date | null;
   canceledAt: Date | null;
   trialEnd: Date | null;
+  startDate: Date | null;
   createdAt: Date;
   metadata: Record<string, string>;
   provider: CashierProvider;
@@ -61,18 +64,34 @@ export interface SubscriptionDiscount {
   percentOff: number | null;
 }
 
+export type SubscriptionPaymentMethod = PaymentMethodDetails & { id: string };
+
 export interface SubscriptionRelationFields {
   product: { product: SubscriptionProduct | null };
   interval: { interval: BillingInterval | null };
   pause: { pause: SubscriptionPause | null };
   discount: { discount: SubscriptionDiscount | null };
+  paymentMethod: { paymentMethod: SubscriptionPaymentMethod | null };
+  latestInvoice: { latestInvoice: Invoice | null };
 }
 
 export type SubscriptionRelation = keyof SubscriptionRelationFields;
 
 export interface CashierSubscriptionRelations {
-  stripe: 'product' | 'interval' | 'pause' | 'discount';
-  recurly: 'product' | 'interval' | 'pause' | 'discount';
+  stripe:
+    | 'product'
+    | 'interval'
+    | 'pause'
+    | 'discount'
+    | 'paymentMethod'
+    | 'latestInvoice';
+  recurly:
+    | 'product'
+    | 'interval'
+    | 'pause'
+    | 'discount'
+    | 'paymentMethod'
+    | 'latestInvoice';
 }
 
 export type ProviderSubscriptionRelation<Provider extends CashierProvider> =
@@ -83,6 +102,10 @@ export type ProviderSubscriptionRelation<Provider extends CashierProvider> =
 
 export type SubscriptionWith<Relation extends SubscriptionRelation = never> =
   Subscription & LoadedRelations<SubscriptionRelationFields, Relation>;
+
+export type GetSubscriptionParams<
+  Relation extends SubscriptionRelation = never,
+> = WithParams<Relation>;
 
 export type SubscriptionStatusFilter = SubscriptionStatus | 'all';
 
@@ -116,16 +139,24 @@ export interface CreateSubscriptionParams {
   metadata?: Record<string, string>;
 }
 
+export type SubscriptionProration = 'prorate' | 'none' | 'invoiceNow';
+
 export interface UpdateSubscriptionParams {
+  item?: string;
   price?: string;
   quantity?: number;
+  proration?: SubscriptionProration;
+  trialEnd?: Date;
   paymentMethod?: string;
   metadata?: Record<string, string>;
 }
 
+export type SubscriptionRefund = 'full' | 'prorated';
+
 export interface CancelSubscriptionParams {
   atPeriodEnd?: boolean;
   comment?: string;
+  refund?: SubscriptionRefund;
 }
 
 export interface SubscriptionsResource<
@@ -140,7 +171,10 @@ export interface SubscriptionsResource<
     params: CursorPaginateSubscriptionsParams<Relation>,
   ): Promise<CursorPaginator<SubscriptionWith<Relation>>>;
   create(params: CreateSubscriptionParams): Promise<Subscription>;
-  get(subscriptionId: string): Promise<Subscription>;
+  get<Relation extends ProviderSubscriptionRelation<Provider> = never>(
+    subscriptionId: string,
+    params?: GetSubscriptionParams<Relation>,
+  ): Promise<SubscriptionWith<Relation>>;
   update(
     subscriptionId: string,
     params: UpdateSubscriptionParams,
@@ -149,4 +183,6 @@ export interface SubscriptionsResource<
     subscriptionId: string,
     params?: CancelSubscriptionParams,
   ): Promise<Subscription>;
+  resume(subscriptionId: string): Promise<Subscription>;
+  changeBillingDate(subscriptionId: string, date: Date): Promise<Subscription>;
 }

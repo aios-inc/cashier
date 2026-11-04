@@ -739,4 +739,492 @@ describe('StripeSubscriptionsResource', () => {
       },
     );
   });
+
+  describe('get with relations', () => {
+    const CARD = {
+      id: 'pm_123',
+      type: 'card',
+      card: {
+        brand: 'visa',
+        last4: '4242',
+        exp_month: 12,
+        exp_year: 2028,
+        wallet: null,
+      },
+    };
+
+    const EXPECTED_CARD = {
+      id: 'pm_123',
+      type: 'card',
+      brand: 'visa',
+      last4: '4242',
+      expMonth: 12,
+      expYear: 2028,
+      wallet: null,
+    };
+
+    const getWith = (
+      overrides: Record<string, unknown>,
+      relations: readonly ('paymentMethod' | 'latestInvoice' | 'product')[],
+    ) => {
+      client.subscriptions.retrieve.mockResolvedValue({
+        ...STRIPE_FIXTURES.SUBSCRIPTION,
+        ...overrides,
+      });
+
+      return subscriptions.get(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+        with: relations,
+      });
+    };
+
+    it('should retrieve without expansions by default', async () => {
+      await getWith({}, []);
+
+      expect(client.subscriptions.retrieve).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        {},
+      );
+    });
+
+    it('should expand the payment methods and the latest invoice', async () => {
+      const subscription = await getWith(
+        {
+          default_payment_method: CARD,
+          latest_invoice: STRIPE_FIXTURES.SUBSCRIPTION_INVOICE,
+        },
+        ['paymentMethod', 'latestInvoice'],
+      );
+
+      expect(client.subscriptions.retrieve).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        {
+          expand: [
+            'default_payment_method',
+            'customer.invoice_settings.default_payment_method',
+            'latest_invoice',
+          ],
+        },
+      );
+      expect(subscription).toEqual({
+        ...STRIPE_FIXTURES.EXPECTED_SUBSCRIPTION,
+        paymentMethod: EXPECTED_CARD,
+        latestInvoice: STRIPE_FIXTURES.EXPECTED_INVOICES[0],
+      });
+    });
+
+    it('should fall back to the customer default payment method', async () => {
+      const subscription = await getWith(
+        {
+          default_payment_method: null,
+          customer: {
+            ...STRIPE_FIXTURES.CUSTOMER,
+            invoice_settings: { default_payment_method: CARD },
+          },
+        },
+        ['paymentMethod'],
+      );
+
+      expect(subscription.customerId).toBe(STRIPE_FIXTURES.CUSTOMER_ID);
+      expect(subscription.paymentMethod).toEqual(EXPECTED_CARD);
+    });
+
+    it.each([
+      ['there is no default anywhere', { default_payment_method: null }],
+      [
+        'the customer was deleted',
+        {
+          default_payment_method: null,
+          customer: STRIPE_FIXTURES.DELETED_CUSTOMER,
+        },
+      ],
+      [
+        'the payment method is not expanded',
+        { default_payment_method: 'pm_123' },
+      ],
+    ])('should have no payment method when %s', async (_case, overrides) => {
+      const subscription = await getWith(overrides, ['paymentMethod']);
+
+      expect(subscription.paymentMethod).toBeNull();
+    });
+
+    it.each([
+      ['there is none', null],
+      ['it is not expanded', 'in_123'],
+    ])(
+      'should have no latest invoice when %s',
+      async (_case, latestInvoice) => {
+        const subscription = await getWith({ latest_invoice: latestInvoice }, [
+          'latestInvoice',
+        ]);
+
+        expect(subscription.latestInvoice).toBeNull();
+      },
+    );
+
+    it('should list the product when the product relation is requested', async () => {
+      client.products.list.mockResolvedValue({
+        data: STRIPE_FIXTURES.SUBSCRIPTION_PRODUCTS,
+      });
+
+      const subscription = await getWith({}, ['product']);
+
+      expect(client.products.list).toHaveBeenCalledWith({
+        ids: ['prod_123'],
+        limit: 100,
+      });
+      expect(subscription.product).toEqual({
+        id: 'prod_123',
+        name: 'Pro Plan',
+      });
+    });
+
+    it('should expand the relations on every listed subscription', async () => {
+      client.subscriptions.list.mockResolvedValue({
+        data: [],
+        has_more: false,
+      });
+
+      await subscriptions.list({
+        customer: STRIPE_FIXTURES.CUSTOMER_ID,
+        with: ['latestInvoice'],
+      });
+
+      expect(client.subscriptions.list).toHaveBeenCalledWith({
+        customer: STRIPE_FIXTURES.CUSTOMER_ID,
+        limit: 100,
+        status: 'all',
+        expand: ['data.latest_invoice'],
+      });
+    });
+  });
+
+  describe('update options', () => {
+    beforeEach(() => {
+      client.subscriptions.update.mockResolvedValue(
+        STRIPE_FIXTURES.SUBSCRIPTION,
+      );
+    });
+
+    it('should change the given item without reading the subscription', async () => {
+      await subscriptions.update(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+        item: 'si_2',
+        quantity: 4,
+        proration: 'invoiceNow',
+      });
+
+      expect(client.subscriptions.retrieve).not.toHaveBeenCalled();
+      expect(client.subscriptions.update).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        {
+          items: [{ id: 'si_2', quantity: 4 }],
+          proration_behavior: 'always_invoice',
+        },
+      );
+    });
+
+    it.each([
+      ['prorate', 'create_prorations'],
+      ['none', 'none'],
+      ['invoiceNow', 'always_invoice'],
+    ] as const)(
+      'should map the %s proration to %s',
+      async (proration, behavior) => {
+        client.subscriptions.retrieve.mockResolvedValue(
+          STRIPE_FIXTURES.SUBSCRIPTION,
+        );
+
+        await subscriptions.update(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+          price: STRIPE_FIXTURES.NEW_PRICE_ID,
+          proration,
+        });
+
+        expect(client.subscriptions.update).toHaveBeenCalledWith(
+          STRIPE_FIXTURES.SUBSCRIPTION_ID,
+          {
+            items: [{ id: 'si_123', price: STRIPE_FIXTURES.NEW_PRICE_ID }],
+            proration_behavior: behavior,
+          },
+        );
+      },
+    );
+
+    it('should set the trial end in unix seconds', async () => {
+      await subscriptions.update(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+        trialEnd: STRIPE_FIXTURES.TRIAL_END,
+      });
+
+      expect(client.subscriptions.update).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        { trial_end: STRIPE_FIXTURES.TRIAL_END.getTime() / 1000 },
+      );
+    });
+
+    it('should reject an item without a price or a quantity', async () => {
+      await expect(
+        subscriptions.update(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+          item: 'si_2',
+        }),
+      ).rejects.toMatchObject({
+        constructor: ValidationError,
+        provider: CashierProvider.Stripe,
+      });
+      expect(client.subscriptions.update).not.toHaveBeenCalled();
+    });
+
+    it('should ask for the item when the subscription has several', async () => {
+      client.subscriptions.retrieve.mockResolvedValue(
+        STRIPE_FIXTURES.MULTI_ITEM_SUBSCRIPTION,
+      );
+
+      await expect(
+        subscriptions.update(STRIPE_FIXTURES.SUBSCRIPTION_ID, { quantity: 2 }),
+      ).rejects.toMatchObject({
+        constructor: ValidationError,
+        message:
+          'Changing price or quantity of a subscription with several items requires the item',
+      });
+    });
+  });
+
+  describe('cancel with a refund', () => {
+    const PERIOD_START = 1767225600;
+    const PERIOD_END = 1769904000;
+
+    const mockLatestInvoice = (
+      charge: Record<string, unknown> | string | null,
+    ) =>
+      client.subscriptions.retrieve.mockResolvedValue({
+        ...STRIPE_FIXTURES.SUBSCRIPTION,
+        current_period_start: PERIOD_START,
+        current_period_end: PERIOD_END,
+        latest_invoice: {
+          ...STRIPE_FIXTURES.SUBSCRIPTION_INVOICE,
+          amount_paid: 29900,
+          charge,
+        },
+      });
+
+    beforeEach(() => {
+      client.subscriptions.cancel.mockResolvedValue(
+        STRIPE_FIXTURES.SUBSCRIPTION,
+      );
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('should cancel now and refund what is left of the latest charge', async () => {
+      mockLatestInvoice({ id: 'ch_123', amount: 29900, amount_refunded: 5000 });
+
+      const subscription = await subscriptions.cancel(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        { refund: 'full' },
+      );
+
+      expect(client.subscriptions.retrieve).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        { expand: ['latest_invoice.charge'] },
+      );
+      expect(client.subscriptions.cancel).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+      );
+      expect(client.refunds.create).toHaveBeenCalledWith({
+        charge: 'ch_123',
+        amount: 24900,
+      });
+      expect(subscription).toEqual(STRIPE_FIXTURES.EXPECTED_SUBSCRIPTION);
+    });
+
+    it('should refund the unused part of the period', async () => {
+      jest.useFakeTimers({
+        doNotFake: ['nextTick', 'queueMicrotask'],
+        now: (PERIOD_START + (PERIOD_END - PERIOD_START) / 4) * 1000,
+      });
+      mockLatestInvoice({ id: 'ch_123', amount: 29900, amount_refunded: 0 });
+
+      await subscriptions.cancel(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+        refund: 'prorated',
+      });
+
+      expect(client.refunds.create).toHaveBeenCalledWith({
+        charge: 'ch_123',
+        amount: 22425,
+      });
+    });
+
+    it('should not refund more than is left on the charge', async () => {
+      jest.useFakeTimers({
+        doNotFake: ['nextTick', 'queueMicrotask'],
+        now: PERIOD_START * 1000,
+      });
+      mockLatestInvoice({
+        id: 'ch_123',
+        amount: 29900,
+        amount_refunded: 20000,
+      });
+
+      await subscriptions.cancel(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+        refund: 'prorated',
+      });
+
+      expect(client.refunds.create).toHaveBeenCalledWith({
+        charge: 'ch_123',
+        amount: 9900,
+      });
+    });
+
+    it('should refund nothing once the period is over', async () => {
+      jest.useFakeTimers({
+        doNotFake: ['nextTick', 'queueMicrotask'],
+        now: (PERIOD_END + 60) * 1000,
+      });
+      mockLatestInvoice({ id: 'ch_123', amount: 29900, amount_refunded: 0 });
+
+      await subscriptions.cancel(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+        refund: 'prorated',
+      });
+
+      expect(client.subscriptions.cancel).toHaveBeenCalled();
+      expect(client.refunds.create).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['the latest invoice has no charge', null],
+      ['the charge is not expanded', 'ch_123'],
+      [
+        'the charge is fully refunded',
+        { id: 'ch_123', amount: 29900, amount_refunded: 29900 },
+      ],
+    ])('should cancel without a refund when %s', async (_case, charge) => {
+      mockLatestInvoice(charge);
+
+      await subscriptions.cancel(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+        refund: 'full',
+      });
+
+      expect(client.subscriptions.cancel).toHaveBeenCalled();
+      expect(client.refunds.create).not.toHaveBeenCalled();
+    });
+
+    it('should not refund when there is no latest invoice', async () => {
+      client.subscriptions.retrieve.mockResolvedValue({
+        ...STRIPE_FIXTURES.SUBSCRIPTION,
+        latest_invoice: null,
+      });
+
+      await subscriptions.cancel(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+        refund: 'full',
+      });
+
+      expect(client.refunds.create).not.toHaveBeenCalled();
+    });
+
+    it('should reject a refund at period end without calling Stripe', async () => {
+      await expect(
+        subscriptions.cancel(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+          atPeriodEnd: true,
+          refund: 'full',
+        }),
+      ).rejects.toMatchObject({
+        constructor: ValidationError,
+        provider: CashierProvider.Stripe,
+      });
+      expect(client.subscriptions.retrieve).not.toHaveBeenCalled();
+      expect(client.subscriptions.update).not.toHaveBeenCalled();
+      expect(client.subscriptions.cancel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resume', () => {
+    beforeEach(() => {
+      client.subscriptions.update.mockResolvedValue(
+        STRIPE_FIXTURES.SUBSCRIPTION,
+      );
+    });
+
+    it('should undo a cancellation at period end', async () => {
+      client.subscriptions.retrieve.mockResolvedValue({
+        ...STRIPE_FIXTURES.SUBSCRIPTION,
+        cancel_at_period_end: true,
+        cancel_at: 1769904000,
+      });
+
+      const subscription = await subscriptions.resume(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+      );
+
+      expect(client.subscriptions.update).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        { cancel_at_period_end: false },
+      );
+      expect(subscription).toEqual(STRIPE_FIXTURES.EXPECTED_SUBSCRIPTION);
+    });
+
+    it('should clear a scheduled cancellation date', async () => {
+      client.subscriptions.retrieve.mockResolvedValue({
+        ...STRIPE_FIXTURES.SUBSCRIPTION,
+        cancel_at_period_end: false,
+        cancel_at: 1768262400,
+      });
+
+      await subscriptions.resume(STRIPE_FIXTURES.SUBSCRIPTION_ID);
+
+      expect(client.subscriptions.update).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        { cancel_at: '' },
+      );
+    });
+
+    it('should reject a subscription that is not scheduled to cancel', async () => {
+      client.subscriptions.retrieve.mockResolvedValue(
+        STRIPE_FIXTURES.SUBSCRIPTION,
+      );
+
+      await expect(
+        subscriptions.resume(STRIPE_FIXTURES.SUBSCRIPTION_ID),
+      ).rejects.toMatchObject({
+        constructor: ValidationError,
+        provider: CashierProvider.Stripe,
+      });
+      expect(client.subscriptions.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('changeBillingDate', () => {
+    it('should move the next charge with a trial end and no proration', async () => {
+      const date = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+      client.subscriptions.update.mockResolvedValue(
+        STRIPE_FIXTURES.SUBSCRIPTION,
+      );
+
+      const subscription = await subscriptions.changeBillingDate(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        date,
+      );
+
+      expect(client.subscriptions.update).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        {
+          trial_end: Math.floor(date.getTime() / 1000),
+          proration_behavior: 'none',
+        },
+      );
+      expect(subscription).toEqual(STRIPE_FIXTURES.EXPECTED_SUBSCRIPTION);
+    });
+
+    it('should reject a date in the past without calling Stripe', async () => {
+      await expect(
+        subscriptions.changeBillingDate(
+          STRIPE_FIXTURES.SUBSCRIPTION_ID,
+          new Date(Date.now() - 1000),
+        ),
+      ).rejects.toMatchObject({
+        constructor: ValidationError,
+        provider: CashierProvider.Stripe,
+      });
+      expect(client.subscriptions.update).not.toHaveBeenCalled();
+    });
+  });
 });

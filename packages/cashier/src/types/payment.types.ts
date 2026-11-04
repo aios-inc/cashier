@@ -1,5 +1,6 @@
-import { CashierProvider } from './cashier.types';
+import { CashierProvider, ProviderCapabilities } from './cashier.types';
 import { CursorPaginateParams, CursorPaginator } from './pagination.types';
+import { PaymentMethodDetails } from './payment-method.types';
 import {
   LoadedRelations,
   ProviderRelation,
@@ -66,19 +67,41 @@ export interface Refund {
   provider: CashierProvider;
 }
 
+export type PaymentEventType =
+  'created' | 'succeeded' | 'failed' | 'canceled' | 'refunded' | 'disputed';
+
+export interface PaymentEvent {
+  type: PaymentEventType;
+  at: Date;
+  amount: number | null;
+}
+
 export interface PaymentRelationFields {
-  refunds: { amountRefunded: number };
+  refunds: { amountRefunded: number; refunds: Refund[] };
   dispute: { dispute: PaymentDispute | null };
   receipt: { receiptUrl: string | null };
   reversal: { reversed: boolean };
   subscription: { subscription: PaymentSubscription | null };
+  paymentMethod: { paymentMethod: PaymentMethodDetails | null };
+  fees: { fee: number | null; net: number | null };
+  statementDescriptor: { statementDescriptor: string | null };
+  timeline: { timeline: PaymentEvent[] };
 }
 
 export type PaymentRelation = keyof PaymentRelationFields;
 
 export interface CashierPaymentRelations {
-  stripe: 'refunds' | 'dispute' | 'receipt' | 'reversal' | 'subscription';
-  recurly: 'refunds' | 'subscription';
+  stripe:
+    | 'refunds'
+    | 'dispute'
+    | 'receipt'
+    | 'reversal'
+    | 'subscription'
+    | 'paymentMethod'
+    | 'fees'
+    | 'statementDescriptor'
+    | 'timeline';
+  recurly: 'refunds' | 'subscription' | 'paymentMethod' | 'timeline';
 }
 
 export type ProviderPaymentRelation<Provider extends CashierProvider> = Extract<
@@ -88,6 +111,9 @@ export type ProviderPaymentRelation<Provider extends CashierProvider> = Extract<
 
 export type PaymentWith<Relation extends PaymentRelation = never> = Payment &
   LoadedRelations<PaymentRelationFields, Relation>;
+
+export type GetPaymentParams<Relation extends PaymentRelation = never> =
+  WithParams<Relation>;
 
 export interface ListPaymentsParams<
   Relation extends PaymentRelation = never,
@@ -117,9 +143,26 @@ export interface RefundPaymentParams {
   metadata?: Record<string, string>;
 }
 
-export interface PaymentsResource<
+export interface SendReceiptParams {
+  email?: string;
+}
+
+export interface PaymentReceipts {
+  sendReceipt(paymentId: string, params?: SendReceiptParams): Promise<void>;
+}
+
+export interface CashierPaymentCapabilities {
+  stripe: PaymentReceipts;
+  recurly: Record<never, never>;
+}
+
+export interface PaymentsResourceMethods<
   Provider extends CashierProvider = CashierProvider,
 > {
+  get<Relation extends ProviderPaymentRelation<Provider> = never>(
+    paymentId: string,
+    params?: GetPaymentParams<Relation>,
+  ): Promise<PaymentWith<Relation>>;
   list<Relation extends ProviderPaymentRelation<Provider> = never>(
     params: ListPaymentsParams<Relation>,
   ): Promise<PaymentWith<Relation>[]>;
@@ -129,3 +172,8 @@ export interface PaymentsResource<
   create(params: CreatePaymentParams): Promise<Payment>;
   refund(paymentId: string, params?: RefundPaymentParams): Promise<Refund>;
 }
+
+export type PaymentsResource<
+  Provider extends CashierProvider = CashierProvider,
+> = PaymentsResourceMethods<Provider> &
+  ProviderCapabilities<CashierPaymentCapabilities, Provider>;

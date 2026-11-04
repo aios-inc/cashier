@@ -3,6 +3,7 @@ import { CashierProvider } from '../../../types/cashier.types';
 import {
   CreatePaymentParams,
   CursorPaginatePaymentsParams,
+  GetPaymentParams,
   ListPaymentsParams,
   Payment,
   PaymentWith,
@@ -23,8 +24,8 @@ import { validateCreatePaymentParams } from '../../../utils/create-params.utils'
 import { resolveRelations } from '../../../utils/relations.utils';
 import { toMajorUnits } from '../../../utils/money.utils';
 import {
+  groupRecurlyRefunds,
   mapRecurlyPayment,
-  sumRecurlyRefunds,
 } from '../mappers/recurly-payment.mapper';
 import { mapRecurlyRefund } from '../mappers/recurly-refund.mapper';
 import { readRecurlyItems, readRecurlyPage } from '../recurly-page';
@@ -57,6 +58,23 @@ const getOldestCreatedAt = (transactions: recurly.Transaction[]): Date =>
 
 export class RecurlyPaymentsResource implements PaymentsResource<CashierProvider.Recurly> {
   constructor(private readonly client: recurly.Client) {}
+
+  get<Relation extends RecurlyPaymentRelation = never>(
+    paymentId: string,
+    params: GetPaymentParams<Relation> = {},
+  ): Promise<PaymentWith<Relation>> {
+    return recurlyRequest(async () => {
+      const relations = resolvePaymentRelations(params.with);
+      const transaction = await this.client.getTransaction(paymentId);
+      const [payment] = await this.map<Relation>(
+        transaction.account?.id ?? '',
+        [transaction],
+        relations,
+      );
+
+      return payment as PaymentWith<Relation>;
+    });
+  }
 
   list<Relation extends RecurlyPaymentRelation = never>({
     customer,
@@ -187,22 +205,23 @@ export class RecurlyPaymentsResource implements PaymentsResource<CashierProvider
     transactions: recurly.Transaction[],
     relations: ReadonlySet<RecurlyPaymentRelation>,
   ): Promise<PaymentWith<Relation>[]> {
-    const refundedPayments = relations.has('refunds')
+    const needsRefunds = relations.has('refunds') || relations.has('timeline');
+    const refundedPayments = needsRefunds
       ? transactions.filter((transaction) => transaction.refunded)
       : [];
-    const refunded =
+    const refunds =
       refundedPayments.length > 0
-        ? sumRecurlyRefunds(
+        ? groupRecurlyRefunds(
             await this.refunds(customer, getOldestCreatedAt(refundedPayments)),
           )
-        : new Map<string, number>();
+        : new Map<string, recurly.Transaction[]>();
 
     return transactions.map(
       (transaction) =>
         mapRecurlyPayment(
           transaction,
           relations,
-          refunded.get(transaction.id ?? '') ?? 0,
+          refunds.get(transaction.id ?? '') ?? [],
         ) as PaymentWith<Relation>,
     );
   }

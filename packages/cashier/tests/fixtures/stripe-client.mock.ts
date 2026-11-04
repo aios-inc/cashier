@@ -6,6 +6,14 @@ export const createStripeClientMock = () => ({
     list: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
+    listPaymentMethods: jest.fn(),
+    createBalanceTransaction: jest.fn(),
+  },
+  accounts: {
+    retrieve: jest.fn(),
+  },
+  charges: {
+    update: jest.fn(),
   },
   invoices: {
     retrieve: jest.fn(),
@@ -14,6 +22,9 @@ export const createStripeClientMock = () => ({
     finalizeInvoice: jest.fn(),
     pay: jest.fn(),
     voidInvoice: jest.fn(),
+    retrieveUpcoming: jest.fn(),
+    listUpcomingLines: jest.fn(),
+    listLineItems: jest.fn(),
   },
   invoiceItems: {
     create: jest.fn(),
@@ -21,6 +32,7 @@ export const createStripeClientMock = () => ({
   paymentIntents: {
     list: jest.fn(),
     create: jest.fn(),
+    retrieve: jest.fn(),
   },
   refunds: {
     create: jest.fn(),

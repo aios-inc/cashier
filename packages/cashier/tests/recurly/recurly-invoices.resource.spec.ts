@@ -4,6 +4,7 @@ import { NotFoundError } from '../../src/errors/not-found.error';
 import { PaymentFailedError } from '../../src/errors/payment-failed.error';
 import { ProviderError } from '../../src/errors/provider.error';
 import { UnsupportedOperationError } from '../../src/errors/unsupported-operation.error';
+import { ValidationError } from '../../src/errors/validation.error';
 import {
   RECURLY_FIXTURES,
   createFailingRecurlyPager,
@@ -17,7 +18,64 @@ import {
   createRecurlyClientMock,
 } from '../fixtures/recurly-client.mock';
 import { CashierProvider } from '../../src/types/cashier.types';
-import { CreateInvoiceParams } from '../../src/types/invoice.types';
+import {
+  CreateInvoiceParams,
+  InvoicePreview,
+} from '../../src/types/invoice.types';
+
+const PLAN_LINE_ITEM = {
+  id: 'li_1',
+  currency: 'usd',
+  description: 'Pro Monthly',
+  amount: 149.99,
+  quantity: 1,
+  unitAmount: 149.99,
+  planId: 'plan_1',
+  subscriptionId: 'rec_sub_1',
+  startDate: new Date('2026-01-01T00:00:00Z'),
+  endDate: new Date('2026-02-01T00:00:00Z'),
+  prorationRate: null,
+} as recurly.LineItem;
+
+const PRORATED_CREDIT_LINE_ITEM = {
+  id: 'li_2',
+  currency: null,
+  description: null,
+  amount: -50,
+  quantity: null,
+  unitAmount: null,
+  planId: null,
+  subscriptionId: null,
+  startDate: null,
+  endDate: null,
+  prorationRate: 0.5,
+} as recurly.LineItem;
+
+const EXPECTED_PLAN_LINE_ITEM = {
+  id: 'li_1',
+  description: 'Pro Monthly',
+  amount: 14999,
+  quantity: 1,
+  unitAmount: 14999,
+  priceId: 'plan_1',
+  subscriptionId: 'rec_sub_1',
+  periodStart: new Date('2026-01-01T00:00:00Z'),
+  periodEnd: new Date('2026-02-01T00:00:00Z'),
+  proration: false,
+};
+
+const EXPECTED_PRORATED_CREDIT_LINE_ITEM = {
+  id: 'li_2',
+  description: null,
+  amount: -5000,
+  quantity: null,
+  unitAmount: null,
+  priceId: null,
+  subscriptionId: null,
+  periodStart: null,
+  periodEnd: null,
+  proration: true,
+};
 
 describe('RecurlyInvoicesResource', () => {
   let client: RecurlyClientMock;
@@ -157,7 +215,7 @@ describe('RecurlyInvoicesResource', () => {
       await expect(
         invoices.list({
           customer: RECURLY_FIXTURES.ACCOUNT_ID,
-          with: ['payments' as 'refunds'],
+          with: ['startingBalance' as 'refunds'],
         }),
       ).rejects.toMatchObject({
         constructor: UnsupportedOperationError,
@@ -531,6 +589,454 @@ describe('RecurlyInvoicesResource', () => {
       await expect(invoices.create(BASE_PARAMS)).rejects.toBeInstanceOf(
         ProviderError,
       );
+    });
+  });
+
+  describe('get with relations', () => {
+    it('should map the line items in minor units', async () => {
+      client.getInvoice.mockResolvedValue({
+        ...RECURLY_FIXTURES.PAID_INVOICE,
+        lineItems: [PLAN_LINE_ITEM, PRORATED_CREDIT_LINE_ITEM],
+        hasMoreLineItems: false,
+      });
+
+      const invoice = await invoices.get(RECURLY_FIXTURES.INVOICE_ID, {
+        with: ['lineItems'],
+      });
+
+      expect(client.listInvoiceLineItems).not.toHaveBeenCalled();
+      expect(invoice).toEqual({
+        ...RECURLY_FIXTURES.EXPECTED_INVOICES[0],
+        lineItems: [
+          EXPECTED_PLAN_LINE_ITEM,
+          EXPECTED_PRORATED_CREDIT_LINE_ITEM,
+        ],
+      });
+    });
+
+    it('should list every line item when the invoice has more than it returned', async () => {
+      client.getInvoice.mockResolvedValue({
+        ...RECURLY_FIXTURES.PAID_INVOICE,
+        lineItems: [PLAN_LINE_ITEM],
+        hasMoreLineItems: true,
+      });
+      client.listInvoiceLineItems.mockReturnValue(
+        createRecurlyPager([PLAN_LINE_ITEM, PRORATED_CREDIT_LINE_ITEM]),
+      );
+
+      const invoice = await invoices.get(RECURLY_FIXTURES.INVOICE_ID, {
+        with: ['lineItems'],
+      });
+
+      expect(client.listInvoiceLineItems).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.INVOICE_ID,
+        { params: { limit: 200 } },
+      );
+      expect(invoice.lineItems).toEqual([
+        EXPECTED_PLAN_LINE_ITEM,
+        EXPECTED_PRORATED_CREDIT_LINE_ITEM,
+      ]);
+    });
+
+    it('should return no line items when Recurly sent none', async () => {
+      client.getInvoice.mockResolvedValue(RECURLY_FIXTURES.PAID_INVOICE);
+
+      const invoice = await invoices.get(RECURLY_FIXTURES.INVOICE_ID, {
+        with: ['lineItems'],
+      });
+
+      expect(invoice.lineItems).toEqual([]);
+    });
+
+    it('should not list line items without the relation', async () => {
+      client.getInvoice.mockResolvedValue({
+        ...RECURLY_FIXTURES.PAID_INVOICE,
+        hasMoreLineItems: true,
+      });
+
+      const invoice = await invoices.get(RECURLY_FIXTURES.INVOICE_ID);
+
+      expect(client.listInvoiceLineItems).not.toHaveBeenCalled();
+      expect(invoice).toEqual(RECURLY_FIXTURES.EXPECTED_INVOICES[0]);
+    });
+
+    it('should keep only the purchase and capture transactions as payments', async () => {
+      client.getInvoice.mockResolvedValue({
+        ...RECURLY_FIXTURES.PAID_INVOICE,
+        transactions: [
+          RECURLY_FIXTURES.SUCCESSFUL_TRANSACTION,
+          { ...RECURLY_FIXTURES.DECLINED_TRANSACTION, type: 'capture' },
+          { ...RECURLY_FIXTURES.REFUNDS[0] },
+          { ...RECURLY_FIXTURES.DECLINED_TRANSACTION, type: 'verify' },
+        ],
+      });
+
+      const invoice = await invoices.get(RECURLY_FIXTURES.INVOICE_ID, {
+        with: ['payments'],
+      });
+
+      expect(invoice.payments).toEqual(RECURLY_FIXTURES.EXPECTED_PAYMENTS);
+    });
+
+    it('should return no payments for an invoice without transactions', async () => {
+      client.getInvoice.mockResolvedValue(RECURLY_FIXTURES.PAID_INVOICE);
+
+      const invoice = await invoices.get(RECURLY_FIXTURES.INVOICE_ID, {
+        with: ['payments'],
+      });
+
+      expect(invoice.payments).toEqual([]);
+    });
+
+    it.each([
+      ['paid', 'paid'],
+      ['failed', 'failed'],
+      ['voided', 'voided'],
+    ] as const)(
+      'should add the %s event at the close date',
+      async (state, type) => {
+        client.getInvoice.mockResolvedValue({
+          ...RECURLY_FIXTURES.PAID_INVOICE,
+          state,
+        });
+
+        const invoice = await invoices.get(RECURLY_FIXTURES.INVOICE_ID, {
+          with: ['timeline'],
+        });
+
+        expect(invoice.timeline).toEqual([
+          { type: 'created', at: new Date('2026-01-01T00:00:00Z') },
+          { type, at: new Date('2026-01-01T01:00:00Z') },
+        ]);
+      },
+    );
+
+    it('should only add the creation of an open invoice', async () => {
+      client.getInvoice.mockResolvedValue({
+        ...RECURLY_FIXTURES.PAID_INVOICE,
+        state: 'pending',
+        closedAt: null,
+      });
+
+      const invoice = await invoices.get(RECURLY_FIXTURES.INVOICE_ID, {
+        with: ['timeline'],
+      });
+
+      expect(invoice.timeline).toEqual([
+        { type: 'created', at: new Date('2026-01-01T00:00:00Z') },
+      ]);
+    });
+
+    it('should report the amount paid and remaining from paid and balance', async () => {
+      client.getInvoice.mockResolvedValue({
+        ...RECURLY_FIXTURES.PAID_INVOICE,
+        paid: 100,
+        balance: 49.99,
+      });
+
+      const invoice = await invoices.get(RECURLY_FIXTURES.INVOICE_ID);
+
+      expect(invoice).toMatchObject({
+        amountPaid: 10000,
+        amountRemaining: 4999,
+      });
+    });
+
+    it('should default the amount paid and remaining to zero', async () => {
+      client.getInvoice.mockResolvedValue({
+        ...RECURLY_FIXTURES.PAID_INVOICE,
+        paid: null,
+        balance: null,
+      });
+
+      const invoice = await invoices.get(RECURLY_FIXTURES.INVOICE_ID);
+
+      expect(invoice).toMatchObject({ amountPaid: 0, amountRemaining: 0 });
+    });
+  });
+
+  describe('list by subscription', () => {
+    it('should list the subscription invoices', async () => {
+      client.listSubscriptionInvoices.mockReturnValue(
+        createRecurlyPager(RECURLY_FIXTURES.INVOICES),
+      );
+
+      const result = await invoices.list({
+        subscription: RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        status: 'paid',
+      });
+
+      expect(client.listSubscriptionInvoices).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        { params: { limit: 100, state: 'paid' } },
+      );
+      expect(client.listAccountInvoices).not.toHaveBeenCalled();
+      expect(result).toEqual(RECURLY_FIXTURES.EXPECTED_INVOICES);
+    });
+
+    it('should list the subscription invoices when a customer is also given', async () => {
+      client.listSubscriptionInvoices.mockReturnValue(createRecurlyPager([]));
+
+      await invoices.list({
+        customer: RECURLY_FIXTURES.ACCOUNT_ID,
+        subscription: RECURLY_FIXTURES.SUBSCRIPTION_ID,
+      });
+
+      expect(client.listSubscriptionInvoices).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        { params: { limit: 100 } },
+      );
+      expect(client.listAccountInvoices).not.toHaveBeenCalled();
+    });
+
+    it('should paginate the subscription invoices with the cursor', async () => {
+      client.listSubscriptionInvoices.mockReturnValue(
+        createRecurlyPagePager(
+          RECURLY_FIXTURES.INVOICES,
+          RECURLY_FIXTURES.NEXT_PATH,
+        ),
+      );
+
+      const page = await invoices.cursorPaginate({
+        subscription: RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        perPage: 2,
+        cursor: RECURLY_FIXTURES.CURSOR,
+      });
+
+      expect(client.listSubscriptionInvoices).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        { params: { limit: 2, cursor: RECURLY_FIXTURES.CURSOR } },
+      );
+      expect(page).toEqual({
+        data: RECURLY_FIXTURES.EXPECTED_INVOICES,
+        perPage: 2,
+        hasMorePages: true,
+        nextCursor: RECURLY_FIXTURES.CURSOR,
+      });
+    });
+
+    it.each([
+      ['list', () => invoices.list({} as { customer: string })],
+      [
+        'cursorPaginate',
+        () => invoices.cursorPaginate({} as { customer: string }),
+      ],
+    ])(
+      'should reject %s without a customer or a subscription without calling Recurly',
+      async (_method, call) => {
+        await expect(call()).rejects.toMatchObject({
+          constructor: ValidationError,
+          provider: CashierProvider.Recurly,
+        });
+        expect(client.listAccountInvoices).not.toHaveBeenCalled();
+        expect(client.listSubscriptionInvoices).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  describe('preview', () => {
+    const SUBSCRIPTION = {
+      ...RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+      quantity: 2,
+      unitAmount: 10,
+      addOns: [
+        {
+          id: 'addon_1',
+          addOn: { name: 'Support' },
+          unitAmount: 2.5,
+          quantity: 2,
+        },
+        { id: null, addOn: null, unitAmount: null, quantity: null },
+      ],
+      subtotal: 25,
+      tax: 2.5,
+      total: 27.5,
+    } as recurly.Subscription;
+
+    const toLineItem = (
+      id: string,
+      description: string | null,
+      amount: number,
+      quantity: number,
+      unitAmount: number,
+      priceId: string | null,
+    ) => ({
+      id,
+      description,
+      amount,
+      quantity,
+      unitAmount,
+      priceId,
+      subscriptionId: 'rec_sub_1',
+      periodStart: new Date('2026-02-01T00:00:00Z'),
+      periodEnd: null,
+      proration: false,
+    });
+
+    it('should estimate the next renewal from the subscription without a change', async () => {
+      client.getSubscription.mockResolvedValue(SUBSCRIPTION);
+
+      const preview = await invoices.preview({
+        subscription: RECURLY_FIXTURES.SUBSCRIPTION_ID,
+      });
+
+      expect(client.getSubscription).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+      );
+      expect(client.previewSubscriptionChange).not.toHaveBeenCalled();
+      expect(preview).toEqual({
+        customerId: RECURLY_FIXTURES.ACCOUNT_ID,
+        subscriptionId: 'rec_sub_1',
+        currency: 'USD',
+        subtotal: 2500,
+        tax: 250,
+        total: 2750,
+        amountDue: 2750,
+        lineItems: [
+          toLineItem('rec_sub_1', 'Pro Monthly', 2000, 2, 1000, 'plan_1'),
+          toLineItem('addon_1', 'Support', 500, 2, 250, null),
+          toLineItem('', null, 0, 1, 0, null),
+        ],
+        nextPaymentAt: new Date('2026-02-01T00:00:00Z'),
+        provider: CashierProvider.Recurly,
+      } satisfies InvoicePreview);
+    });
+
+    it('should preview a change now by plan code and map the invoice Recurly would charge', async () => {
+      client.getSubscription.mockResolvedValue(SUBSCRIPTION);
+      client.previewSubscriptionChange.mockResolvedValue({
+        invoiceCollection: {
+          chargeInvoice: {
+            ...RECURLY_FIXTURES.PAID_INVOICE,
+            subtotal: 75,
+            tax: 7.5,
+            total: 82.5,
+            balance: 80,
+            dueAt: new Date('2026-01-20T00:00:00Z'),
+            lineItems: [PLAN_LINE_ITEM, PRORATED_CREDIT_LINE_ITEM],
+          },
+        },
+      });
+
+      const preview = await invoices.preview({
+        subscription: RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        price: RECURLY_FIXTURES.PLAN_CODE_REFERENCE,
+        quantity: 3,
+        proration: 'prorate',
+      });
+
+      expect(client.previewSubscriptionChange).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        { timeframe: 'now', planCode: 'pro-monthly', quantity: 3 },
+      );
+      expect(preview).toEqual({
+        customerId: RECURLY_FIXTURES.ACCOUNT_ID,
+        subscriptionId: 'rec_sub_1',
+        currency: 'USD',
+        subtotal: 7500,
+        tax: 750,
+        total: 8250,
+        amountDue: 8000,
+        lineItems: [
+          EXPECTED_PLAN_LINE_ITEM,
+          EXPECTED_PRORATED_CREDIT_LINE_ITEM,
+        ],
+        nextPaymentAt: new Date('2026-01-20T00:00:00Z'),
+        provider: CashierProvider.Recurly,
+      } satisfies InvoicePreview);
+    });
+
+    it('should use the total as the amount due when the charge invoice has no balance', async () => {
+      client.getSubscription.mockResolvedValue(SUBSCRIPTION);
+      client.previewSubscriptionChange.mockResolvedValue({
+        invoiceCollection: {
+          chargeInvoice: {
+            ...RECURLY_FIXTURES.PAID_INVOICE,
+            balance: null,
+            dueAt: null,
+          },
+        },
+      });
+
+      const preview = await invoices.preview({
+        subscription: RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        quantity: 3,
+      });
+
+      expect(preview).toMatchObject({
+        amountDue: 14999,
+        lineItems: [],
+        nextPaymentAt: null,
+      });
+    });
+
+    it('should estimate the next renewal from the change without proration when there is no charge invoice', async () => {
+      client.getSubscription.mockResolvedValue(SUBSCRIPTION);
+      client.previewSubscriptionChange.mockResolvedValue({
+        plan: { id: 'plan_2', name: 'Pro Legacy' },
+        unitAmount: 20,
+        quantity: 1,
+        addOns: [],
+        invoiceCollection: null,
+      });
+
+      const preview = await invoices.preview({
+        subscription: RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        price: 'plan_2',
+        proration: 'none',
+      });
+
+      expect(client.previewSubscriptionChange).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        {
+          timeframe: 'now',
+          planId: 'plan_2',
+          prorationSettings: { charge: 'none', credit: 'none' },
+        },
+      );
+      expect(preview).toEqual({
+        customerId: RECURLY_FIXTURES.ACCOUNT_ID,
+        subscriptionId: 'rec_sub_1',
+        currency: 'USD',
+        subtotal: 2000,
+        tax: 0,
+        total: 2000,
+        amountDue: 2000,
+        lineItems: [
+          toLineItem('rec_sub_1', 'Pro Legacy', 2000, 1, 2000, 'plan_2'),
+        ],
+        nextPaymentAt: new Date('2026-02-01T00:00:00Z'),
+        provider: CashierProvider.Recurly,
+      } satisfies InvoicePreview);
+    });
+
+    it('should keep the subscription plan, quantity and add-ons the change leaves out', async () => {
+      client.getSubscription.mockResolvedValue(SUBSCRIPTION);
+      client.previewSubscriptionChange.mockResolvedValue({});
+
+      const preview = await invoices.preview({
+        subscription: RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        quantity: 2,
+      });
+
+      expect(preview).toMatchObject({ subtotal: 2500, tax: 0, total: 2500 });
+      expect(preview.lineItems).toHaveLength(3);
+    });
+
+    it('should map a missing subscription to NotFoundError', async () => {
+      client.getSubscription.mockRejectedValue(
+        withRecurlyStatus(
+          new recurly.errors.NotFoundError('Not found', 'not_found', {}),
+          404,
+        ),
+      );
+
+      await expect(
+        invoices.preview({ subscription: RECURLY_FIXTURES.SUBSCRIPTION_ID }),
+      ).rejects.toMatchObject({
+        constructor: NotFoundError,
+        provider: CashierProvider.Recurly,
+      });
     });
   });
 });

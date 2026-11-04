@@ -14,6 +14,13 @@ import {
   SubscriptionWith,
 } from '../../../types/subscription.types';
 import { toMinorUnits } from '../../../utils/money.utils';
+import { mapRecurlyInvoice } from './recurly-invoice.mapper';
+import { mapRecurlySubscriptionPaymentMethod } from './recurly-payment-method.mapper';
+
+export interface RecurlySubscriptionLoaded {
+  billingInfo?: recurly.BillingInfo | null;
+  latestInvoice?: recurly.Invoice | null;
+}
 
 const RECURLY_SUBSCRIPTION_STATUSES: Record<string, SubscriptionStatus> = {
   active: 'active',
@@ -94,6 +101,7 @@ export const mapRecurlySubscription = (
   subscription: recurly.Subscription,
   relations: ReadonlySet<SubscriptionRelation> = new Set(),
   plans: ReadonlyMap<string, recurly.Plan> = new Map(),
+  loaded: RecurlySubscriptionLoaded = {},
 ): Subscription & Partial<SubscriptionWith<SubscriptionRelation>> => {
   const currency = (subscription.currency ?? '').toUpperCase();
 
@@ -123,6 +131,7 @@ export const mapRecurlySubscription = (
         : null,
     canceledAt: subscription.canceledAt ?? null,
     trialEnd: subscription.trialEndsAt ?? null,
+    startDate: subscription.activatedAt ?? null,
     createdAt: subscription.createdAt ?? new Date(0),
     metadata: mapCustomFields(subscription.customFields),
     provider: CashierProvider.Recurly,
@@ -141,6 +150,20 @@ export const mapRecurlySubscription = (
       : {}),
     ...(relations.has('discount')
       ? { discount: mapRecurlySubscriptionDiscount(subscription, currency) }
+      : {}),
+    ...(relations.has('paymentMethod')
+      ? {
+          paymentMethod: mapRecurlySubscriptionPaymentMethod(
+            loaded.billingInfo ?? null,
+          ),
+        }
+      : {}),
+    ...(relations.has('latestInvoice')
+      ? {
+          latestInvoice: loaded.latestInvoice
+            ? mapRecurlyInvoice(loaded.latestInvoice)
+            : null,
+        }
       : {}),
   };
 };

@@ -1,26 +1,73 @@
 import * as recurly from 'recurly';
 import { CashierProvider } from '../../../types/cashier.types';
 import {
+  AdjustBalanceParams,
+  BalanceTransaction,
   CreateCustomerParams,
   Customer,
+  CustomerRelation,
+  CustomerWith,
   CustomersResource,
+  GetCustomerParams,
   ListCustomersParams,
   UpdateCustomerParams,
 } from '../../../types/customer.types';
-import { DEFAULT_LIST_LIMIT } from '../../../constants/cashier.constants';
+import {
+  DEFAULT_LIST_LIMIT,
+  RECURLY_MAX_LIST_LIMIT,
+} from '../../../constants/cashier.constants';
 import { ValidationError } from '../../../errors/validation.error';
-import { mapRecurlyAccount } from '../mappers/recurly-account.mapper';
+import { validateAdjustBalanceParams } from '../../../utils/create-params.utils';
+import { toMajorUnits } from '../../../utils/money.utils';
+import { resolveRelations } from '../../../utils/relations.utils';
+import {
+  mapRecurlyAccount,
+  mapRecurlyAccountBalances,
+  mapRecurlyBalanceTransaction,
+} from '../mappers/recurly-account.mapper';
 import { toRecurlyCustomFields } from '../mappers/recurly-subscription.mapper';
 import { getRecurlyBillingInfo } from '../recurly-billing-info';
+import { readRecurlyItems } from '../recurly-page';
 import { recurlyRequest } from '../recurly-request';
+
+const RECURLY_CUSTOMER_RELATIONS: ReadonlySet<string> = new Set(['balances']);
 
 export class RecurlyCustomersResource implements CustomersResource {
   constructor(private readonly client: recurly.Client) {}
 
-  get(customerId: string): Promise<Customer> {
-    return recurlyRequest(async () =>
-      mapRecurlyAccount(await this.client.getAccount(customerId)),
-    );
+  get<Relation extends CustomerRelation = never>(
+    customerId: string,
+    params: GetCustomerParams<Relation> = {},
+  ): Promise<CustomerWith<Relation>> {
+    return recurlyRequest(async () => {
+      const relations: ReadonlySet<CustomerRelation> = resolveRelations(
+        CashierProvider.Recurly,
+        'customers',
+        RECURLY_CUSTOMER_RELATIONS,
+        params.with,
+      );
+      const customer = mapRecurlyAccount(
+        await this.client.getAccount(customerId),
+      );
+
+      if (!relations.has('balances')) return customer as CustomerWith<Relation>;
+
+      const [balance, pendingLineItems] = await Promise.all([
+        this.client.getAccountBalance(customerId),
+        readRecurlyItems(
+          this.client.listAccountLineItems(customerId, {
+            params: { state: 'pending', limit: RECURLY_MAX_LIST_LIMIT },
+          }),
+        ),
+      ]);
+
+      const loaded: Customer & Partial<CustomerWith<CustomerRelation>> = {
+        ...customer,
+        balances: mapRecurlyAccountBalances(balance, pendingLineItems),
+      };
+
+      return loaded as CustomerWith<Relation>;
+    });
   }
 
   list({
@@ -116,6 +163,41 @@ export class RecurlyCustomersResource implements CustomersResource {
       }
 
       return mapRecurlyAccount(account);
+    });
+  }
+
+  creditBalance(
+    customerId: string,
+    params: AdjustBalanceParams,
+  ): Promise<BalanceTransaction> {
+    return this.adjustBalance(customerId, params, 'credit');
+  }
+
+  debitBalance(
+    customerId: string,
+    params: AdjustBalanceParams,
+  ): Promise<BalanceTransaction> {
+    return this.adjustBalance(customerId, params, 'charge');
+  }
+
+  private adjustBalance(
+    customerId: string,
+    params: AdjustBalanceParams,
+    type: 'credit' | 'charge',
+  ): Promise<BalanceTransaction> {
+    return recurlyRequest(async () => {
+      validateAdjustBalanceParams(params, CashierProvider.Recurly);
+
+      const currency = params.currency.toUpperCase();
+
+      return mapRecurlyBalanceTransaction(
+        await this.client.createLineItem(customerId, {
+          type,
+          currency,
+          unitAmount: toMajorUnits(params.amount, currency),
+          ...(params.description ? { description: params.description } : {}),
+        }),
+      );
     });
   }
 }

@@ -5,10 +5,13 @@ import {
   CursorPaginateInvoicesParams,
   GetInvoiceParams,
   Invoice,
+  InvoicePreview,
+  InvoiceScope,
   InvoiceWith,
   InvoicesResource,
   ListInvoicesParams,
   PayInvoiceParams,
+  PreviewInvoiceParams,
   ProviderInvoiceRelation,
 } from '../../../types/invoice.types';
 import { CursorPaginator } from '../../../types/pagination.types';
@@ -18,33 +21,30 @@ import {
   MILLISECONDS_PER_DAY,
   RECURLY_COLLECTION_METHODS,
   RECURLY_INVOICE_RELATIONS,
+  RECURLY_MAX_LIST_LIMIT,
 } from '../../../constants/cashier.constants';
 import { UnsupportedOperationError } from '../../../errors/unsupported-operation.error';
+import { ValidationError } from '../../../errors/validation.error';
 import { validateCreateInvoiceParams } from '../../../utils/create-params.utils';
 import { resolveRelations } from '../../../utils/relations.utils';
-import { mapRecurlyInvoice } from '../mappers/recurly-invoice.mapper';
+import {
+  mapRecurlyInvoice,
+  mapRecurlyInvoicePreview,
+  mapRecurlySubscriptionPreview,
+} from '../mappers/recurly-invoice.mapper';
 import { readRecurlyItems, readRecurlyPage } from '../recurly-page';
 import {
   createRecurlyPurchase,
   toRecurlyPurchaseLineItem,
 } from '../recurly-purchase';
 import { recurlyRequest } from '../recurly-request';
+import { toRecurlySubscriptionChange } from '../recurly-subscription-change';
 
 type RecurlyInvoiceRelation = ProviderInvoiceRelation<CashierProvider.Recurly>;
 
-const toInvoiceMapper = <Relation extends RecurlyInvoiceRelation>(
-  requested?: readonly Relation[],
-): ((invoice: recurly.Invoice) => InvoiceWith<Relation>) => {
-  const relations = resolveRelations(
-    CashierProvider.Recurly,
-    'invoices',
-    RECURLY_INVOICE_RELATIONS,
-    requested,
-  );
-
-  return (invoice) =>
-    mapRecurlyInvoice(invoice, relations) as InvoiceWith<Relation>;
-};
+type RecurlyInvoiceMapper<Relation extends RecurlyInvoiceRelation> = (
+  invoices: recurly.Invoice[],
+) => Promise<InvoiceWith<Relation>[]>;
 
 const toRecurlyNetTerms = ({
   collection,
@@ -72,29 +72,39 @@ export class RecurlyInvoicesResource implements InvoicesResource<CashierProvider
     params: GetInvoiceParams<Relation> = {},
   ): Promise<InvoiceWith<Relation>> {
     return recurlyRequest(async () => {
-      const map = toInvoiceMapper(params.with);
+      const map = this.toInvoiceMapper(params.with);
+      const [invoice] = await map([await this.client.getInvoice(invoiceId)]);
 
-      return map(await this.client.getInvoice(invoiceId));
+      return invoice as InvoiceWith<Relation>;
     });
   }
 
   list<Relation extends RecurlyInvoiceRelation = never>({
     customer,
+    subscription,
     status,
     limit = DEFAULT_LIST_LIMIT,
     with: relations,
   }: ListInvoicesParams<Relation>): Promise<InvoiceWith<Relation>[]> {
     return recurlyRequest(async () => {
-      const map = toInvoiceMapper(relations);
+      const map = this.toInvoiceMapper(relations);
 
-      return (
-        await readRecurlyItems(this.invoices(customer, limit, status), limit)
-      ).map(map);
+      return map(
+        await readRecurlyItems(
+          this.invoices(
+            { customer, subscription } as InvoiceScope,
+            limit,
+            status,
+          ),
+          limit,
+        ),
+      );
     });
   }
 
   cursorPaginate<Relation extends RecurlyInvoiceRelation = never>({
     customer,
+    subscription,
     status,
     perPage = DEFAULT_LIST_LIMIT,
     cursor,
@@ -103,13 +113,18 @@ export class RecurlyInvoicesResource implements InvoicesResource<CashierProvider
     CursorPaginator<InvoiceWith<Relation>>
   > {
     return recurlyRequest(async () => {
-      const map = toInvoiceMapper(relations);
+      const map = this.toInvoiceMapper(relations);
       const page = await readRecurlyPage(
-        this.invoices(customer, perPage, status, cursor),
+        this.invoices(
+          { customer, subscription } as InvoiceScope,
+          perPage,
+          status,
+          cursor,
+        ),
       );
 
       return {
-        data: page.items.map(map),
+        data: await map(page.items),
         perPage,
         hasMorePages: page.hasMorePages,
         nextCursor: page.nextCursor,
@@ -185,18 +200,94 @@ export class RecurlyInvoicesResource implements InvoicesResource<CashierProvider
     );
   }
 
+  preview({
+    subscription,
+    price,
+    quantity,
+    proration,
+  }: PreviewInvoiceParams): Promise<InvoicePreview> {
+    return recurlyRequest(async () => {
+      const current = await this.client.getSubscription(subscription);
+
+      if (price === undefined && quantity === undefined) {
+        return mapRecurlySubscriptionPreview(current);
+      }
+
+      const change = await this.client.previewSubscriptionChange(
+        subscription,
+        toRecurlySubscriptionChange({ price, quantity, proration }),
+      );
+      const chargeInvoice = change.invoiceCollection?.chargeInvoice;
+
+      return chargeInvoice
+        ? mapRecurlyInvoicePreview(chargeInvoice, current.id ?? subscription)
+        : mapRecurlySubscriptionPreview(current, change);
+    });
+  }
+
+  private toInvoiceMapper<Relation extends RecurlyInvoiceRelation>(
+    requested?: readonly Relation[],
+  ): RecurlyInvoiceMapper<Relation> {
+    const relations: ReadonlySet<RecurlyInvoiceRelation> = resolveRelations(
+      CashierProvider.Recurly,
+      'invoices',
+      RECURLY_INVOICE_RELATIONS,
+      requested,
+    );
+
+    return async (invoices) =>
+      Promise.all(
+        invoices.map(
+          async (invoice) =>
+            mapRecurlyInvoice(
+              relations.has('lineItems')
+                ? await this.withLineItems(invoice)
+                : invoice,
+              relations,
+            ) as InvoiceWith<Relation>,
+        ),
+      );
+  }
+
+  private async withLineItems(
+    invoice: recurly.Invoice,
+  ): Promise<recurly.Invoice> {
+    if (!invoice.hasMoreLineItems || !invoice.id) return invoice;
+
+    const lineItems = await readRecurlyItems(
+      this.client.listInvoiceLineItems(invoice.id, {
+        params: { limit: RECURLY_MAX_LIST_LIMIT },
+      }),
+    );
+
+    return { ...invoice, lineItems, hasMoreLineItems: false };
+  }
+
   private invoices(
-    customer: string,
+    { customer, subscription }: InvoiceScope,
     limit: number,
     status?: 'paid',
     cursor?: string | null,
   ): recurly.Pager<recurly.Invoice> {
-    return this.client.listAccountInvoices(customer, {
+    const options = {
       params: {
         limit,
         ...(status ? { state: status } : {}),
         ...(cursor ? { cursor } : {}),
       },
-    });
+    };
+
+    if (subscription) {
+      return this.client.listSubscriptionInvoices(subscription, options);
+    }
+
+    if (!customer) {
+      throw new ValidationError(
+        'Listing invoices requires a customer or a subscription',
+        { provider: CashierProvider.Recurly },
+      );
+    }
+
+    return this.client.listAccountInvoices(customer, options);
   }
 }

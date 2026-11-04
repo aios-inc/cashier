@@ -26,3 +26,21 @@ export const getRecurlyBillingInfo = async (
     );
   }
 };
+
+export const findRecurlyBillingInfo = async (
+  client: recurly.Client,
+  accountId: string,
+  billingInfoId: string | null | undefined,
+): Promise<recurly.BillingInfo | null> => {
+  try {
+    return billingInfoId
+      ? await client.getABillingInfo(accountId, billingInfoId)
+      : await client.getBillingInfo(accountId);
+  } catch (error) {
+    const mapped = mapRecurlyError(error);
+
+    if (mapped instanceof NotFoundError) return null;
+
+    throw mapped;
+  }
+};

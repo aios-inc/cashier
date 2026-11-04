@@ -1,4 +1,5 @@
 import { CashierProvider } from '../types/cashier.types';
+import { AdjustBalanceParams } from '../types/customer.types';
 import { CreateInvoiceParams } from '../types/invoice.types';
 import { CreatePaymentParams } from '../types/payment.types';
 import { ValidationError } from '../errors/validation.error';
@@ -76,6 +77,17 @@ export const validateCreateInvoiceParams = (
 
 export const validateCreatePaymentParams = (
   { currency, amount }: CreatePaymentParams,
+  provider: CashierProvider,
+): void => {
+  validateCurrency(currency, provider);
+
+  if (!isPositiveInteger(amount)) {
+    fail('The amount must be a positive integer in minor units', provider);
+  }
+};
+
+export const validateAdjustBalanceParams = (
+  { currency, amount }: AdjustBalanceParams,
   provider: CashierProvider,
 ): void => {
   validateCurrency(currency, provider);

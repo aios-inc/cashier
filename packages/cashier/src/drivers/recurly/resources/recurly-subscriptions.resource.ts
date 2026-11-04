@@ -4,6 +4,7 @@ import {
   CancelSubscriptionParams,
   CreateSubscriptionParams,
   CursorPaginateSubscriptionsParams,
+  GetSubscriptionParams,
   ListSubscriptionsParams,
   ProviderSubscriptionRelation,
   Subscription,
@@ -15,6 +16,7 @@ import {
 import { CursorPaginator } from '../../../types/pagination.types';
 import {
   DEFAULT_LIST_LIMIT,
+  RECURLY_SUBSCRIPTION_REFUNDS,
   RECURLY_SUBSCRIPTION_RELATIONS,
   RECURLY_SUBSCRIPTION_STATE_FILTERS,
 } from '../../../constants/cashier.constants';
@@ -23,17 +25,22 @@ import { UnsupportedOperationError } from '../../../errors/unsupported-operation
 import { ValidationError } from '../../../errors/validation.error';
 import { resolveRelations } from '../../../utils/relations.utils';
 import {
+  RecurlySubscriptionLoaded,
   mapRecurlySubscription,
   mapRecurlySubscriptionStatus,
   toRecurlyCustomFields,
 } from '../mappers/recurly-subscription.mapper';
-import { getRecurlyBillingInfo } from '../recurly-billing-info';
+import {
+  findRecurlyBillingInfo,
+  getRecurlyBillingInfo,
+} from '../recurly-billing-info';
 import {
   RECURLY_CODE_PREFIX,
   toRecurlyPlanReference,
 } from '../recurly-plan-reference';
 import { readRecurlyItems, readRecurlyPage } from '../recurly-page';
 import { recurlyRequest } from '../recurly-request';
+import { toRecurlySubscriptionChange } from '../recurly-subscription-change';
 
 type RecurlySubscriptionRelation =
   ProviderSubscriptionRelation<CashierProvider.Recurly>;
@@ -47,6 +54,24 @@ const resolveSubscriptionRelations = (
     RECURLY_SUBSCRIPTION_RELATIONS,
     requested,
   );
+
+const fail = (message: string): never => {
+  throw new ValidationError(message, { provider: CashierProvider.Recurly });
+};
+
+const isInTrial = (subscription: recurly.Subscription): boolean =>
+  (subscription.trialEndsAt?.getTime() ?? 0) > Date.now();
+
+const getAccountId = (subscription: recurly.Subscription): string => {
+  if (!subscription.account?.id) {
+    throw new ProviderError(
+      `Recurly subscription ${subscription.id} has no account`,
+      { provider: CashierProvider.Recurly },
+    );
+  }
+
+  return subscription.account.id;
+};
 
 const hasStatus =
   (status: SubscriptionStatusFilter) =>
@@ -150,32 +175,69 @@ export class RecurlySubscriptionsResource implements SubscriptionsResource<Cashi
     });
   }
 
-  get(subscriptionId: string): Promise<Subscription> {
-    return recurlyRequest(async () =>
-      mapRecurlySubscription(await this.client.getSubscription(subscriptionId)),
-    );
+  get<Relation extends RecurlySubscriptionRelation = never>(
+    subscriptionId: string,
+    params: GetSubscriptionParams<Relation> = {},
+  ): Promise<SubscriptionWith<Relation>> {
+    return recurlyRequest(async () => {
+      const relations = resolveSubscriptionRelations(params.with);
+      const [subscription] = await this.map<Relation>(
+        [await this.client.getSubscription(subscriptionId)],
+        relations,
+      );
+
+      return subscription as SubscriptionWith<Relation>;
+    });
   }
 
   update(
     subscriptionId: string,
-    { price, quantity, paymentMethod, metadata }: UpdateSubscriptionParams,
+    {
+      item,
+      price,
+      quantity,
+      proration,
+      trialEnd,
+      paymentMethod,
+      metadata,
+    }: UpdateSubscriptionParams,
   ): Promise<Subscription> {
     return recurlyRequest(async () => {
-      if (paymentMethod) {
-        await this.getBillingInfo(subscriptionId, paymentMethod);
+      if (item) {
+        throw new UnsupportedOperationError(
+          'Recurly subscriptions have a single plan, so there is no item to choose',
+          { provider: CashierProvider.Recurly },
+        );
+      }
+
+      const current =
+        paymentMethod || trialEnd
+          ? await this.client.getSubscription(subscriptionId)
+          : null;
+
+      if (current && paymentMethod) {
+        await getRecurlyBillingInfo(
+          this.client,
+          getAccountId(current),
+          paymentMethod,
+        );
+      }
+
+      if (current && trialEnd && !isInTrial(current)) {
+        fail(`Subscription ${subscriptionId} is not in a trial`);
       }
 
       if (price !== undefined || quantity !== undefined) {
-        await this.client.createSubscriptionChange(subscriptionId, {
-          timeframe: 'now',
-          ...(price ? toRecurlyPlanReference(price) : {}),
-          ...(quantity !== undefined ? { quantity } : {}),
-        });
+        await this.client.createSubscriptionChange(
+          subscriptionId,
+          toRecurlySubscriptionChange({ price, quantity, proration }),
+        );
       }
 
-      if (metadata || paymentMethod) {
+      if (metadata || paymentMethod || trialEnd) {
         await this.client.updateSubscription(subscriptionId, {
           ...(paymentMethod ? { billingInfoId: paymentMethod } : {}),
+          ...(trialEnd ? { nextBillDate: trialEnd } : {}),
           ...(metadata
             ? { customFields: toRecurlyCustomFields(metadata) }
             : {}),
@@ -190,7 +252,7 @@ export class RecurlySubscriptionsResource implements SubscriptionsResource<Cashi
 
   cancel(
     subscriptionId: string,
-    { atPeriodEnd = false, comment }: CancelSubscriptionParams = {},
+    { atPeriodEnd = false, comment, refund }: CancelSubscriptionParams = {},
   ): Promise<Subscription> {
     return recurlyRequest(async () => {
       if (comment) {
@@ -200,32 +262,44 @@ export class RecurlySubscriptionsResource implements SubscriptionsResource<Cashi
         );
       }
 
+      if (refund && atPeriodEnd) {
+        fail('A refund is only possible when canceling now, not at period end');
+      }
+
       return mapRecurlySubscription(
         atPeriodEnd
           ? await this.client.cancelSubscription(subscriptionId, {
               params: { timeframe: 'term_end' },
             })
           : await this.client.terminateSubscription(subscriptionId, {
-              params: { refund: 'none' },
+              params: {
+                refund: refund ? RECURLY_SUBSCRIPTION_REFUNDS[refund] : 'none',
+              },
             }),
       );
     });
   }
 
-  private async getBillingInfo(
-    subscriptionId: string,
-    billingInfoId: string,
-  ): Promise<recurly.BillingInfo> {
-    const { account } = await this.client.getSubscription(subscriptionId);
+  resume(subscriptionId: string): Promise<Subscription> {
+    return recurlyRequest(async () =>
+      mapRecurlySubscription(
+        await this.client.reactivateSubscription(subscriptionId),
+      ),
+    );
+  }
 
-    if (!account?.id) {
-      throw new ProviderError(
-        `Recurly subscription ${subscriptionId} has no account`,
-        { provider: CashierProvider.Recurly },
+  changeBillingDate(subscriptionId: string, date: Date): Promise<Subscription> {
+    return recurlyRequest(async () => {
+      if (!(date.getTime() > Date.now())) {
+        fail('The billing date must be in the future');
+      }
+
+      return mapRecurlySubscription(
+        await this.client.updateSubscription(subscriptionId, {
+          nextBillDate: date,
+        }),
       );
-    }
-
-    return getRecurlyBillingInfo(this.client, account.id, billingInfoId);
+    });
   }
 
   private subscriptions(
@@ -254,18 +328,57 @@ export class RecurlySubscriptionsResource implements SubscriptionsResource<Cashi
     subscriptions: recurly.Subscription[],
     relations: ReadonlySet<RecurlySubscriptionRelation>,
   ): Promise<SubscriptionWith<Relation>[]> {
-    const plans = relations.has('interval')
-      ? await this.getPlans(subscriptions)
-      : new Map<string, recurly.Plan>();
+    const [plans, loaded] = await Promise.all([
+      relations.has('interval')
+        ? this.getPlans(subscriptions)
+        : new Map<string, recurly.Plan>(),
+      Promise.all(
+        subscriptions.map((subscription) => this.load(subscription, relations)),
+      ),
+    ]);
 
     return subscriptions.map(
-      (subscription) =>
+      (subscription, index) =>
         mapRecurlySubscription(
           subscription,
           relations,
           plans,
+          loaded[index],
         ) as SubscriptionWith<Relation>,
     );
+  }
+
+  private async load(
+    subscription: recurly.Subscription,
+    relations: ReadonlySet<RecurlySubscriptionRelation>,
+  ): Promise<RecurlySubscriptionLoaded> {
+    const [billingInfo, latestInvoice] = await Promise.all([
+      relations.has('paymentMethod')
+        ? findRecurlyBillingInfo(
+            this.client,
+            getAccountId(subscription),
+            subscription.billingInfoId,
+          )
+        : null,
+      relations.has('latestInvoice') && subscription.id
+        ? this.getLatestInvoice(subscription.id)
+        : null,
+    ]);
+
+    return { billingInfo, latestInvoice };
+  }
+
+  private async getLatestInvoice(
+    subscriptionId: string,
+  ): Promise<recurly.Invoice | null> {
+    const [invoice] = await readRecurlyItems(
+      this.client.listSubscriptionInvoices(subscriptionId, {
+        params: { limit: 1, sort: 'created_at', order: 'desc' },
+      }),
+      1,
+    );
+
+    return invoice ?? null;
   }
 
   private async getPlans(

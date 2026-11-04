@@ -1,5 +1,6 @@
 import * as recurly from 'recurly';
 import { RecurlySubscriptionsResource } from '../../src/drivers/recurly/resources/recurly-subscriptions.resource';
+import { AuthenticationError } from '../../src/errors/authentication.error';
 import { PaymentMethodError } from '../../src/errors/payment-method.error';
 import { ProviderError } from '../../src/errors/provider.error';
 import { UnsupportedOperationError } from '../../src/errors/unsupported-operation.error';
@@ -802,5 +803,444 @@ describe('RecurlySubscriptionsResource', () => {
         expect(client.cancelSubscription).not.toHaveBeenCalled();
       },
     );
+  });
+
+  describe('startDate', () => {
+    it('should be null for a subscription that was never activated', async () => {
+      client.getSubscription.mockResolvedValue({
+        ...RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+        activatedAt: null,
+      });
+
+      const subscription = await subscriptions.get(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+      );
+
+      expect(subscription.startDate).toBeNull();
+    });
+  });
+
+  describe('get with relations', () => {
+    const CARD_BILLING_INFO = {
+      id: RECURLY_FIXTURES.BILLING_INFO_ID,
+      paymentMethod: {
+        object: 'credit_card',
+        cardType: 'MasterCard',
+        lastFour: '4444',
+        expMonth: 8,
+        expYear: 2027,
+      },
+    } as recurly.BillingInfo;
+
+    const EXPECTED_CARD = {
+      id: RECURLY_FIXTURES.BILLING_INFO_ID,
+      type: 'card',
+      brand: 'mastercard',
+      last4: '4444',
+      expMonth: 8,
+      expYear: 2027,
+      wallet: null,
+    };
+
+    it('should load the billing info the subscription is billed with', async () => {
+      client.getSubscription.mockResolvedValue({
+        ...RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+        billingInfoId: RECURLY_FIXTURES.BILLING_INFO_ID,
+      });
+      client.getABillingInfo.mockResolvedValue(CARD_BILLING_INFO);
+
+      const subscription = await subscriptions.get(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        { with: ['paymentMethod'] },
+      );
+
+      expect(client.getABillingInfo).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.ACCOUNT_ID,
+        RECURLY_FIXTURES.BILLING_INFO_ID,
+      );
+      expect(client.getBillingInfo).not.toHaveBeenCalled();
+      expect(subscription).toEqual({
+        ...RECURLY_FIXTURES.EXPECTED_ACTIVE_SUBSCRIPTION,
+        paymentMethod: EXPECTED_CARD,
+      });
+    });
+
+    it('should load the account billing info when the subscription has none of its own', async () => {
+      client.getSubscription.mockResolvedValue(
+        RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+      );
+      client.getBillingInfo.mockResolvedValue(CARD_BILLING_INFO);
+
+      const subscription = await subscriptions.get(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        { with: ['paymentMethod'] },
+      );
+
+      expect(client.getBillingInfo).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.ACCOUNT_ID,
+      );
+      expect(client.getABillingInfo).not.toHaveBeenCalled();
+      expect(subscription.paymentMethod).toEqual(EXPECTED_CARD);
+    });
+
+    it('should be null when the account has no billing info', async () => {
+      client.getSubscription.mockResolvedValue(
+        RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+      );
+      client.getBillingInfo.mockRejectedValue(
+        withRecurlyStatus(
+          new recurly.errors.NotFoundError('Not found', 'not_found', {}),
+          404,
+        ),
+      );
+
+      const subscription = await subscriptions.get(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        { with: ['paymentMethod'] },
+      );
+
+      expect(subscription.paymentMethod).toBeNull();
+    });
+
+    it('should map any other billing info error', async () => {
+      client.getSubscription.mockResolvedValue(
+        RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+      );
+      client.getBillingInfo.mockRejectedValue(
+        withRecurlyStatus(
+          new recurly.errors.UnauthorizedError(
+            'Unauthorized',
+            'unauthorized',
+            {},
+          ),
+          401,
+        ),
+      );
+
+      await expect(
+        subscriptions.get(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
+          with: ['paymentMethod'],
+        }),
+      ).rejects.toMatchObject({
+        constructor: AuthenticationError,
+        provider: CashierProvider.Recurly,
+      });
+    });
+
+    it('should reject the payment method of a subscription without an account', async () => {
+      client.getSubscription.mockResolvedValue({
+        ...RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+        account: null,
+      });
+
+      await expect(
+        subscriptions.get(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
+          with: ['paymentMethod'],
+        }),
+      ).rejects.toBeInstanceOf(ProviderError);
+    });
+
+    it('should load the latest invoice of the subscription', async () => {
+      client.getSubscription.mockResolvedValue(
+        RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+      );
+      client.listSubscriptionInvoices.mockReturnValue(
+        createRecurlyPager(RECURLY_FIXTURES.INVOICES),
+      );
+
+      const subscription = await subscriptions.get(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        { with: ['latestInvoice'] },
+      );
+
+      expect(client.listSubscriptionInvoices).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        { params: { limit: 1, sort: 'created_at', order: 'desc' } },
+      );
+      expect(subscription).toEqual({
+        ...RECURLY_FIXTURES.EXPECTED_ACTIVE_SUBSCRIPTION,
+        latestInvoice: RECURLY_FIXTURES.EXPECTED_INVOICES[0],
+      });
+    });
+
+    it('should have no latest invoice when the subscription has none', async () => {
+      client.getSubscription.mockResolvedValue(
+        RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+      );
+      client.listSubscriptionInvoices.mockReturnValue(createRecurlyPager([]));
+
+      const subscription = await subscriptions.get(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        { with: ['latestInvoice'] },
+      );
+
+      expect(subscription.latestInvoice).toBeNull();
+    });
+
+    it('should load the payment method and latest invoice of every listed subscription', async () => {
+      client.listAccountSubscriptions.mockReturnValue(
+        createRecurlyPager([
+          RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+          RECURLY_FIXTURES.PAUSED_DISCOUNTED_SUBSCRIPTION,
+        ]),
+      );
+      client.getBillingInfo.mockResolvedValue(CARD_BILLING_INFO);
+      client.listSubscriptionInvoices.mockReturnValue(createRecurlyPager([]));
+
+      const result = await subscriptions.list({
+        customer: RECURLY_FIXTURES.ACCOUNT_ID,
+        with: ['paymentMethod', 'latestInvoice'],
+      });
+
+      expect(client.getBillingInfo).toHaveBeenCalledTimes(2);
+      expect(client.listSubscriptionInvoices).toHaveBeenCalledWith(
+        'rec_sub_2',
+        { params: { limit: 1, sort: 'created_at', order: 'desc' } },
+      );
+      expect(result.map((subscription) => subscription.paymentMethod)).toEqual([
+        EXPECTED_CARD,
+        EXPECTED_CARD,
+      ]);
+    });
+
+    it('should not load billing infos or invoices without the relations', async () => {
+      client.getSubscription.mockResolvedValue(
+        RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+      );
+
+      await subscriptions.get(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
+        with: ['product'],
+      });
+
+      expect(client.getBillingInfo).not.toHaveBeenCalled();
+      expect(client.getABillingInfo).not.toHaveBeenCalled();
+      expect(client.listSubscriptionInvoices).not.toHaveBeenCalled();
+    });
+
+    it('should reject a relation Recurly does not support without calling Recurly', async () => {
+      await expect(
+        subscriptions.get(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
+          with: ['refunds' as 'product'],
+        }),
+      ).rejects.toMatchObject({
+        constructor: UnsupportedOperationError,
+        provider: CashierProvider.Recurly,
+      });
+      expect(client.getSubscription).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('update options', () => {
+    it('should reject an item without calling Recurly', async () => {
+      await expect(
+        subscriptions.update(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
+          item: 'si_123',
+          quantity: 2,
+        }),
+      ).rejects.toMatchObject({
+        constructor: UnsupportedOperationError,
+        provider: CashierProvider.Recurly,
+      });
+      expect(client.getSubscription).not.toHaveBeenCalled();
+      expect(client.createSubscriptionChange).not.toHaveBeenCalled();
+    });
+
+    it('should change the plan without proration', async () => {
+      client.createSubscriptionChange.mockResolvedValue({});
+      client.getSubscription.mockResolvedValue(
+        RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+      );
+
+      await subscriptions.update(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
+        price: RECURLY_FIXTURES.PLAN_ID,
+        proration: 'none',
+      });
+
+      expect(client.createSubscriptionChange).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        {
+          timeframe: 'now',
+          planId: RECURLY_FIXTURES.PLAN_ID,
+          prorationSettings: { charge: 'none', credit: 'none' },
+        },
+      );
+    });
+
+    it.each(['prorate', 'invoiceNow'] as const)(
+      'should keep Recurly default proration for %s',
+      async (proration) => {
+        client.createSubscriptionChange.mockResolvedValue({});
+        client.getSubscription.mockResolvedValue(
+          RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+        );
+
+        await subscriptions.update(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
+          quantity: 3,
+          proration,
+        });
+
+        expect(client.createSubscriptionChange).toHaveBeenCalledWith(
+          RECURLY_FIXTURES.SUBSCRIPTION_ID,
+          { timeframe: 'now', quantity: 3 },
+        );
+      },
+    );
+
+    it('should move the trial end with the next bill date during a trial', async () => {
+      const trialEnd = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+
+      client.getSubscription.mockResolvedValue({
+        ...RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+        trialEndsAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      });
+      client.updateSubscription.mockResolvedValue({});
+
+      await subscriptions.update(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
+        trialEnd,
+        metadata: { source: 'admin' },
+      });
+
+      expect(client.updateSubscription).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        {
+          nextBillDate: trialEnd,
+          customFields: [{ name: 'source', value: 'admin' }],
+        },
+      );
+    });
+
+    it('should reject a trial end outside a trial before any write', async () => {
+      client.getSubscription.mockResolvedValue(
+        RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+      );
+
+      await expect(
+        subscriptions.update(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
+          trialEnd: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          quantity: 2,
+        }),
+      ).rejects.toMatchObject({
+        constructor: ValidationError,
+        provider: CashierProvider.Recurly,
+      });
+      expect(client.createSubscriptionChange).not.toHaveBeenCalled();
+      expect(client.updateSubscription).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('cancel with a refund', () => {
+    it.each([
+      ['full', 'full'],
+      ['prorated', 'partial'],
+    ] as const)(
+      'should terminate with a %s refund',
+      async (refund, recurlyRefund) => {
+        client.terminateSubscription.mockResolvedValue(
+          RECURLY_FIXTURES.EXPIRED_SUBSCRIPTION,
+        );
+
+        const subscription = await subscriptions.cancel(
+          RECURLY_FIXTURES.SUBSCRIPTION_ID,
+          { refund },
+        );
+
+        expect(client.terminateSubscription).toHaveBeenCalledWith(
+          RECURLY_FIXTURES.SUBSCRIPTION_ID,
+          { params: { refund: recurlyRefund } },
+        );
+        expect(subscription).toEqual(
+          RECURLY_FIXTURES.EXPECTED_EXPIRED_SUBSCRIPTION,
+        );
+      },
+    );
+
+    it('should reject a refund at period end without calling Recurly', async () => {
+      await expect(
+        subscriptions.cancel(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
+          atPeriodEnd: true,
+          refund: 'full',
+        }),
+      ).rejects.toMatchObject({
+        constructor: ValidationError,
+        provider: CashierProvider.Recurly,
+      });
+      expect(client.cancelSubscription).not.toHaveBeenCalled();
+      expect(client.terminateSubscription).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resume', () => {
+    it('should reactivate the canceled subscription', async () => {
+      client.reactivateSubscription.mockResolvedValue(
+        RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+      );
+
+      const subscription = await subscriptions.resume(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+      );
+
+      expect(client.reactivateSubscription).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+      );
+      expect(subscription).toEqual(
+        RECURLY_FIXTURES.EXPECTED_ACTIVE_SUBSCRIPTION,
+      );
+    });
+
+    it('should map a subscription Recurly cannot reactivate', async () => {
+      client.reactivateSubscription.mockRejectedValue(
+        withRecurlyStatus(
+          new recurly.errors.ValidationError(
+            'Subscription is not canceled',
+            'validation',
+            {},
+          ),
+          422,
+        ),
+      );
+
+      await expect(
+        subscriptions.resume(RECURLY_FIXTURES.SUBSCRIPTION_ID),
+      ).rejects.toMatchObject({
+        constructor: ValidationError,
+        provider: CashierProvider.Recurly,
+      });
+    });
+  });
+
+  describe('changeBillingDate', () => {
+    it('should set the next bill date', async () => {
+      const date = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000);
+
+      client.updateSubscription.mockResolvedValue(
+        RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+      );
+
+      const subscription = await subscriptions.changeBillingDate(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        date,
+      );
+
+      expect(client.updateSubscription).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        { nextBillDate: date },
+      );
+      expect(subscription).toEqual(
+        RECURLY_FIXTURES.EXPECTED_ACTIVE_SUBSCRIPTION,
+      );
+    });
+
+    it('should reject a date that is not in the future without calling Recurly', async () => {
+      await expect(
+        subscriptions.changeBillingDate(
+          RECURLY_FIXTURES.SUBSCRIPTION_ID,
+          new Date(Date.now() - 1000),
+        ),
+      ).rejects.toMatchObject({
+        constructor: ValidationError,
+        provider: CashierProvider.Recurly,
+      });
+      expect(client.updateSubscription).not.toHaveBeenCalled();
+    });
   });
 });
