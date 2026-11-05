@@ -31,9 +31,9 @@ const createInvalidRequestError = (code: string, message: string) =>
   } as Stripe.StripeRawError);
 
 const EXPAND = [
-  'data.latest_charge',
-  'data.latest_charge.dispute',
   'data.latest_charge.refunds',
+  'data.latest_charge.dispute',
+  'data.latest_charge',
   'data.invoice.subscription',
 ];
 
@@ -126,14 +126,18 @@ describe('StripePaymentsResource', () => {
     });
 
     it.each([
-      ['refunds', ['data.latest_charge'], 'amountRefunded'],
-      ['dispute', ['data.latest_charge.dispute'], 'dispute'],
-      ['receipt', ['data.latest_charge'], 'receiptUrl'],
-      ['reversal', ['data.latest_charge.refunds'], 'reversed'],
-      ['subscription', ['data.invoice.subscription'], 'subscription'],
+      [
+        'refunds',
+        ['data.latest_charge.refunds'],
+        ['amountRefunded', 'refunds'],
+      ],
+      ['dispute', ['data.latest_charge.dispute'], ['dispute']],
+      ['receipt', ['data.latest_charge'], ['receiptUrl']],
+      ['reversal', ['data.latest_charge.refunds'], ['reversed']],
+      ['subscription', ['data.invoice.subscription'], ['subscription']],
     ] as const)(
       'should only expand and add what the %s relation needs',
-      async (relation, expand, field) => {
+      async (relation, expand, fields) => {
         client.paymentIntents.list.mockResolvedValue({
           data: [STRIPE_FIXTURES.SUCCEEDED_PAYMENT_INTENT],
         });
@@ -150,7 +154,12 @@ describe('StripePaymentsResource', () => {
         });
         expect(payment).toEqual({
           ...STRIPE_FIXTURES.EXPECTED_PAYMENTS[0],
-          [field]: STRIPE_FIXTURES.EXPECTED_PAYMENTS_WITH_RELATIONS[0]?.[field],
+          ...Object.fromEntries(
+            fields.map((field) => [
+              field,
+              STRIPE_FIXTURES.EXPECTED_PAYMENTS_WITH_RELATIONS[0]?.[field],
+            ]),
+          ),
         });
       },
     );
@@ -310,7 +319,19 @@ describe('StripePaymentsResource', () => {
       ['there are no refunds', { refunds: { data: [] } }],
       [
         'no refund is a card reversal',
-        { refunds: { data: [{ id: 're_1', destination_details: null }] } },
+        {
+          refunds: {
+            data: [
+              {
+                id: 're_1',
+                currency: 'gbp',
+                amount: 100,
+                created: 1767484800,
+                destination_details: null,
+              },
+            ],
+          },
+        },
       ],
     ])('should be false when %s', async (_case, charge) => {
       const payment = await withCharge(charge);
@@ -591,6 +612,357 @@ describe('StripePaymentsResource', () => {
         providerCode: code,
         message,
       });
+    });
+  });
+
+  describe('get', () => {
+    it('should retrieve the payment intent without expansions by default', async () => {
+      client.paymentIntents.retrieve.mockResolvedValue(
+        STRIPE_FIXTURES.SUCCEEDED_PAYMENT_INTENT,
+      );
+
+      const payment = await payments.get(STRIPE_FIXTURES.PAYMENT_ID);
+
+      expect(client.paymentIntents.retrieve).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.PAYMENT_ID,
+        {},
+      );
+      expect(payment).toEqual(STRIPE_FIXTURES.EXPECTED_PAYMENTS[0]);
+    });
+
+    it('should expand what the requested relations need, without the data prefix', async () => {
+      client.paymentIntents.retrieve.mockResolvedValue(
+        STRIPE_FIXTURES.SUCCEEDED_PAYMENT_INTENT,
+      );
+
+      await payments.get(STRIPE_FIXTURES.PAYMENT_ID, {
+        with: ['paymentMethod', 'fees', 'statementDescriptor', 'timeline'],
+      });
+
+      expect(client.paymentIntents.retrieve).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.PAYMENT_ID,
+        {
+          expand: [
+            'latest_charge',
+            'latest_charge.balance_transaction',
+            'latest_charge.refunds',
+            'latest_charge.dispute',
+          ],
+        },
+      );
+    });
+
+    it('should reject a relation Stripe does not support without calling Stripe', async () => {
+      await expect(
+        payments.get(STRIPE_FIXTURES.PAYMENT_ID, {
+          with: ['charges' as 'refunds'],
+        }),
+      ).rejects.toMatchObject({
+        constructor: UnsupportedOperationError,
+        provider: CashierProvider.Stripe,
+      });
+      expect(client.paymentIntents.retrieve).not.toHaveBeenCalled();
+    });
+
+    it('should throw NotFoundError when the payment does not exist', async () => {
+      client.paymentIntents.retrieve.mockRejectedValue(
+        createStripeMissingResourceError(),
+      );
+
+      await expect(
+        payments.get(STRIPE_FIXTURES.PAYMENT_ID),
+      ).rejects.toMatchObject({
+        constructor: NotFoundError,
+        provider: CashierProvider.Stripe,
+      });
+    });
+  });
+
+  describe('new relations', () => {
+    const getWith = async (
+      overrides: Record<string, unknown>,
+      relation: 'paymentMethod' | 'fees' | 'statementDescriptor' | 'timeline',
+    ) => {
+      client.paymentIntents.retrieve.mockResolvedValue({
+        ...STRIPE_FIXTURES.SUCCEEDED_PAYMENT_INTENT,
+        ...overrides,
+      });
+
+      return payments.get(STRIPE_FIXTURES.PAYMENT_ID, { with: [relation] });
+    };
+
+    const chargeWith = (overrides: Record<string, unknown>) => ({
+      latest_charge: { ...STRIPE_FIXTURES.REFUNDED_CHARGE, ...overrides },
+    });
+
+    describe('paymentMethod', () => {
+      it('should map the card the charge used, with its wallet', async () => {
+        const payment = await getWith(
+          chargeWith({
+            payment_method_details: {
+              type: 'card',
+              card: {
+                brand: 'mastercard',
+                last4: '4444',
+                exp_month: 3,
+                exp_year: 2029,
+                wallet: { type: 'google_pay' },
+              },
+            },
+          }),
+          'paymentMethod',
+        );
+
+        expect(payment.paymentMethod).toEqual({
+          type: 'card',
+          brand: 'mastercard',
+          last4: '4444',
+          expMonth: 3,
+          expYear: 2029,
+          wallet: 'google_pay',
+        });
+      });
+
+      it('should be null when there is no charge', async () => {
+        const payment = await getWith({ latest_charge: null }, 'paymentMethod');
+
+        expect(payment.paymentMethod).toBeNull();
+      });
+
+      it('should be null when the charge has no payment method details', async () => {
+        const payment = await getWith(
+          chargeWith({ payment_method_details: null }),
+          'paymentMethod',
+        );
+
+        expect(payment.paymentMethod).toBeNull();
+      });
+    });
+
+    describe('fees', () => {
+      it('should read the fee and net amount from the balance transaction', async () => {
+        const payment = await getWith(
+          chargeWith({
+            balance_transaction: { id: 'txn_123', fee: 397, net: 12503 },
+          }),
+          'fees',
+        );
+
+        expect(payment).toMatchObject({ fee: 397, net: 12503 });
+      });
+
+      it.each([
+        [
+          'the balance transaction is not expanded',
+          chargeWith({ balance_transaction: 'txn_123' }),
+        ],
+        ['there is no charge', { latest_charge: null }],
+      ])('should be null when %s', async (_case, overrides) => {
+        const payment = await getWith(overrides, 'fees');
+
+        expect(payment).toMatchObject({ fee: null, net: null });
+      });
+    });
+
+    describe('statementDescriptor', () => {
+      it('should use the descriptor Stripe calculated for the charge', async () => {
+        const payment = await getWith(
+          {
+            statement_descriptor: 'ACME',
+            ...chargeWith({ calculated_statement_descriptor: 'ACME* WEGOVY' }),
+          },
+          'statementDescriptor',
+        );
+
+        expect(payment.statementDescriptor).toBe('ACME* WEGOVY');
+      });
+
+      it('should fall back to the payment intent descriptor', async () => {
+        const payment = await getWith(
+          { statement_descriptor: 'ACME', latest_charge: null },
+          'statementDescriptor',
+        );
+
+        expect(payment.statementDescriptor).toBe('ACME');
+      });
+
+      it('should be null when there is none', async () => {
+        const payment = await getWith(
+          { statement_descriptor: null, latest_charge: null },
+          'statementDescriptor',
+        );
+
+        expect(payment.statementDescriptor).toBeNull();
+      });
+    });
+
+    describe('timeline', () => {
+      it('should list the creation, charge, dispute and counted refunds in time order', async () => {
+        const payment = await getWith(
+          chargeWith({
+            status: 'succeeded',
+            amount: 12900,
+            created: 1767225660,
+            refunds: {
+              data: [
+                {
+                  id: 're_2',
+                  status: 'succeeded',
+                  amount: 1000,
+                  created: 1767571200,
+                },
+                {
+                  id: 're_1',
+                  status: 'pending',
+                  amount: 3000,
+                  created: 1767484800,
+                },
+                {
+                  id: 're_3',
+                  status: 'failed',
+                  amount: 500,
+                  created: 1767500000,
+                },
+                {
+                  id: 're_4',
+                  status: 'canceled',
+                  amount: 500,
+                  created: 1767500000,
+                },
+              ],
+            },
+          }),
+          'timeline',
+        );
+
+        expect(payment.timeline).toEqual([
+          { type: 'created', at: new Date(1767225600 * 1000), amount: 12900 },
+          { type: 'succeeded', at: new Date(1767225660 * 1000), amount: 12900 },
+          { type: 'disputed', at: new Date(1767398400 * 1000), amount: 12900 },
+          { type: 'refunded', at: new Date(1767484800 * 1000), amount: 3000 },
+          { type: 'refunded', at: new Date(1767571200 * 1000), amount: 1000 },
+        ]);
+      });
+
+      it('should add a failed charge', async () => {
+        const payment = await getWith(
+          {
+            status: 'requires_payment_method',
+            latest_charge: {
+              id: 'ch_failed',
+              status: 'failed',
+              amount: 12900,
+              created: 1767225660,
+              refunds: { data: [] },
+              dispute: null,
+            },
+          },
+          'timeline',
+        );
+
+        expect(payment.timeline).toEqual([
+          { type: 'created', at: new Date(1767225600 * 1000), amount: 12900 },
+          { type: 'failed', at: new Date(1767225660 * 1000), amount: 12900 },
+        ]);
+      });
+
+      it('should add the cancellation and skip a pending charge', async () => {
+        const payment = await getWith(
+          {
+            status: 'canceled',
+            canceled_at: 1767312000,
+            latest_charge: {
+              id: 'ch_pending',
+              status: 'pending',
+              amount: 12900,
+              created: 1767225660,
+            },
+          },
+          'timeline',
+        );
+
+        expect(payment.timeline).toEqual([
+          { type: 'created', at: new Date(1767225600 * 1000), amount: 12900 },
+          { type: 'canceled', at: new Date(1767312000 * 1000), amount: null },
+        ]);
+      });
+
+      it('should only have the creation when there is no charge', async () => {
+        const payment = await getWith({ latest_charge: null }, 'timeline');
+
+        expect(payment.timeline).toEqual([
+          { type: 'created', at: new Date(1767225600 * 1000), amount: 12900 },
+        ]);
+      });
+    });
+  });
+
+  describe('sendReceipt', () => {
+    const mockPaymentIntent = (overrides: Record<string, unknown> = {}) =>
+      client.paymentIntents.retrieve.mockResolvedValue({
+        ...STRIPE_FIXTURES.SUCCEEDED_PAYMENT_INTENT,
+        receipt_email: null,
+        customer: STRIPE_FIXTURES.CUSTOMER,
+        ...overrides,
+      });
+
+    it('should send the receipt to the given email', async () => {
+      mockPaymentIntent({ receipt_email: 'old@example.com' });
+
+      await payments.sendReceipt(STRIPE_FIXTURES.PAYMENT_ID, {
+        email: 'new@example.com',
+      });
+
+      expect(client.paymentIntents.retrieve).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.PAYMENT_ID,
+        { expand: ['customer'] },
+      );
+      expect(client.charges.update).toHaveBeenCalledWith('ch_123', {
+        receipt_email: 'new@example.com',
+      });
+    });
+
+    it('should fall back to the payment receipt email', async () => {
+      mockPaymentIntent({
+        receipt_email: 'receipt@example.com',
+        latest_charge: 'ch_456',
+      });
+
+      await payments.sendReceipt(STRIPE_FIXTURES.PAYMENT_ID);
+
+      expect(client.charges.update).toHaveBeenCalledWith('ch_456', {
+        receipt_email: 'receipt@example.com',
+      });
+    });
+
+    it('should fall back to the customer email', async () => {
+      mockPaymentIntent();
+
+      await payments.sendReceipt(STRIPE_FIXTURES.PAYMENT_ID);
+
+      expect(client.charges.update).toHaveBeenCalledWith('ch_123', {
+        receipt_email: STRIPE_FIXTURES.CUSTOMER_EMAIL,
+      });
+    });
+
+    it.each([
+      ['the payment did not succeed', { status: 'processing' }],
+      ['the payment has no charge', { latest_charge: null }],
+      ['there is no email', { customer: 'cus_123' }],
+      [
+        'the customer was deleted',
+        { customer: STRIPE_FIXTURES.DELETED_CUSTOMER },
+      ],
+    ])('should throw ValidationError when %s', async (_case, overrides) => {
+      mockPaymentIntent(overrides);
+
+      await expect(
+        payments.sendReceipt(STRIPE_FIXTURES.PAYMENT_ID),
+      ).rejects.toMatchObject({
+        constructor: ValidationError,
+        provider: CashierProvider.Stripe,
+      });
+      expect(client.charges.update).not.toHaveBeenCalled();
     });
   });
 });

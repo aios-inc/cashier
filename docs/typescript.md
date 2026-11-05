@@ -33,7 +33,7 @@ Cashier checks the config when it is created. An empty `apiKey` throws `Authenti
 
 ## Get a driver with `use`
 
-`use` returns a driver. A driver has the `customers`, `invoices`, `payments`, `products`, `prices` and `subscriptions` resources described in the [API reference](README.md#api-reference).
+`use` returns a driver. A driver has the `customers`, `invoices`, `payments`, `paymentMethods`, `products`, `prices` and `subscriptions` resources described in the [API reference](README.md#api-reference). The Stripe driver also has `account`.
 
 ```ts
 await cashier.use().subscriptions.create({
@@ -60,6 +60,36 @@ await cashier
 Providers are named with the `CashierProvider` enum (`CashierProvider.Stripe`, `CashierProvider.Recurly`), so a plain string like `'stripe'` does not compile. The enum values are the strings `'stripe'` and `'recurly'`, which is also what `provider` holds on every result and error.
 
 A driver typed for one provider only accepts the relations that provider can load in `with`, such as `dispute` on Stripe. `CashierDriver`, which `use()` returns, accepts the relations every provider supports. See [Loading relations](payments.md#loading-relations-with-with).
+
+### Provider-only methods
+
+Some methods exist on one provider only, because the other provider's API cannot do it:
+
+| Method                                                                    | Driver |
+| ------------------------------------------------------------------------- | ------ |
+| [`account.get`](account.md#accountget)                                    | Stripe |
+| [`payments.sendReceipt`](payments.md#paymentssendreceiptpaymentid-params) | Stripe |
+| [`invoices.sendReceipt`](invoices.md#invoicessendreceiptinvoiceid-params) | Stripe |
+
+They are typed per provider, in `CashierDriverCapabilities`, `CashierPaymentCapabilities` and `CashierInvoiceCapabilities`, like the relations in `with`. They are only on a driver typed for that provider, so calling them anywhere else does not compile:
+
+```ts
+await cashier.use(CashierProvider.Stripe).payments.sendReceipt('pi_123');
+
+// Does not compile: Recurly cannot send receipts
+await cashier.use(CashierProvider.Recurly).payments.sendReceipt('123');
+
+// Does not compile: not every provider can send receipts
+await cashier.use().payments.sendReceipt('pi_123');
+```
+
+When the default provider may be either one, check it and use the typed driver:
+
+```ts
+if (cashier.defaultProvider === CashierProvider.Stripe) {
+  await cashier.use(CashierProvider.Stripe).payments.sendReceipt(paymentId);
+}
+```
 
 `cashier.defaultProvider` tells you which provider `use()` returns, or `null` when there is no default.
 

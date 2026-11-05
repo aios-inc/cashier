@@ -1,35 +1,54 @@
 import Stripe from 'stripe';
 import { CashierProvider } from '../../../types/cashier.types';
 import {
+  AdjustBalanceParams,
+  BalanceTransaction,
   CreateCustomerParams,
   Customer,
+  CustomerRelation,
+  CustomerWith,
   CustomersResource,
+  GetCustomerParams,
   ListCustomersParams,
   UpdateCustomerParams,
 } from '../../../types/customer.types';
 import { DEFAULT_LIST_LIMIT } from '../../../constants/cashier.constants';
-import { NotFoundError } from '../../../errors/not-found.error';
 import { ValidationError } from '../../../errors/validation.error';
+import { validateAdjustBalanceParams } from '../../../utils/create-params.utils';
+import { resolveRelations } from '../../../utils/relations.utils';
 import {
+  mapStripeBalanceTransaction,
   mapStripeCustomer,
+  mapStripeCustomerBalances,
   toStripeCustomerName,
 } from '../mappers/stripe-customer.mapper';
+import { retrieveStripeCustomer } from '../stripe-customer';
 import { stripeRequest } from '../stripe-request';
+
+const STRIPE_CUSTOMER_RELATIONS: ReadonlySet<string> = new Set(['balances']);
 
 export class StripeCustomersResource implements CustomersResource {
   constructor(private readonly client: Stripe) {}
 
-  get(customerId: string): Promise<Customer> {
+  get<Relation extends CustomerRelation = never>(
+    customerId: string,
+    params: GetCustomerParams<Relation> = {},
+  ): Promise<CustomerWith<Relation>> {
     return stripeRequest(async () => {
-      const customer = await this.client.customers.retrieve(customerId);
+      const relations: ReadonlySet<CustomerRelation> = resolveRelations(
+        CashierProvider.Stripe,
+        'customers',
+        STRIPE_CUSTOMER_RELATIONS,
+        params.with,
+      );
+      const customer = await retrieveStripeCustomer(this.client, customerId);
 
-      if (customer.deleted) {
-        throw new NotFoundError(`Customer ${customerId} has been deleted`, {
-          provider: CashierProvider.Stripe,
-        });
-      }
-
-      return mapStripeCustomer(customer);
+      return {
+        ...mapStripeCustomer(customer),
+        ...(relations.has('balances')
+          ? { balances: mapStripeCustomerBalances(customer) }
+          : {}),
+      } as CustomerWith<Relation>;
     });
   }
 
@@ -68,7 +87,13 @@ export class StripeCustomersResource implements CustomersResource {
 
   update(
     customerId: string,
-    { email, firstName, lastName, metadata }: UpdateCustomerParams,
+    {
+      email,
+      firstName,
+      lastName,
+      metadata,
+      defaultPaymentMethod,
+    }: UpdateCustomerParams,
   ): Promise<Customer> {
     if ((firstName === undefined) !== (lastName === undefined)) {
       return Promise.reject(
@@ -87,8 +112,47 @@ export class StripeCustomersResource implements CustomersResource {
           ...(email ? { email } : {}),
           ...(name ? { name } : {}),
           ...(metadata ? { metadata } : {}),
+          ...(defaultPaymentMethod
+            ? {
+                invoice_settings: {
+                  default_payment_method: defaultPaymentMethod,
+                },
+              }
+            : {}),
         }),
       ),
     );
+  }
+
+  creditBalance(
+    customerId: string,
+    params: AdjustBalanceParams,
+  ): Promise<BalanceTransaction> {
+    return this.adjustBalance(customerId, params, -1);
+  }
+
+  debitBalance(
+    customerId: string,
+    params: AdjustBalanceParams,
+  ): Promise<BalanceTransaction> {
+    return this.adjustBalance(customerId, params, 1);
+  }
+
+  private adjustBalance(
+    customerId: string,
+    params: AdjustBalanceParams,
+    sign: 1 | -1,
+  ): Promise<BalanceTransaction> {
+    return stripeRequest(async () => {
+      validateAdjustBalanceParams(params, CashierProvider.Stripe);
+
+      return mapStripeBalanceTransaction(
+        await this.client.customers.createBalanceTransaction(customerId, {
+          amount: sign * params.amount,
+          currency: params.currency.toLowerCase(),
+          ...(params.description ? { description: params.description } : {}),
+        }),
+      );
+    });
   }
 }

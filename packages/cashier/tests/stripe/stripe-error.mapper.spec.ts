@@ -48,6 +48,30 @@ describe('mapStripeError', () => {
       NotFoundError,
     ],
     [
+      'a customer default payment method that is missing or detached',
+      new Stripe.errors.StripeInvalidRequestError(
+        raw({
+          type: 'invalid_request_error',
+          code: 'resource_missing',
+          param: 'invoice_settings[default_payment_method]',
+          statusCode: 400,
+        }),
+      ),
+      PaymentMethodError,
+    ],
+    [
+      'a subscription default payment method that is missing or detached',
+      new Stripe.errors.StripeInvalidRequestError(
+        raw({
+          type: 'invalid_request_error',
+          code: 'resource_missing',
+          param: 'default_payment_method',
+          statusCode: 400,
+        }),
+      ),
+      PaymentMethodError,
+    ],
+    [
       'a lock timeout',
       new Stripe.errors.StripeInvalidRequestError(
         raw({

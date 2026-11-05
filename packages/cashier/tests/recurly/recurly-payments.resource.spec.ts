@@ -583,4 +583,244 @@ describe('RecurlyPaymentsResource', () => {
       });
     });
   });
+
+  describe('get', () => {
+    it('should retrieve and map the transaction without relation fields', async () => {
+      client.getTransaction.mockResolvedValue(
+        RECURLY_FIXTURES.SUCCESSFUL_TRANSACTION,
+      );
+
+      const payment = await payments.get(RECURLY_FIXTURES.PAYMENT_ID);
+
+      expect(client.getTransaction).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.PAYMENT_ID,
+      );
+      expect(client.listAccountTransactions).not.toHaveBeenCalled();
+      expect(payment).toEqual(RECURLY_FIXTURES.EXPECTED_PAYMENTS[0]);
+    });
+
+    it('should list the account refunds created since the payment for the refunds relation', async () => {
+      client.getTransaction.mockResolvedValue(
+        RECURLY_FIXTURES.SUCCESSFUL_TRANSACTION,
+      );
+      client.listAccountTransactions.mockReturnValue(
+        createRecurlyPager(RECURLY_FIXTURES.REFUNDS),
+      );
+
+      const payment = await payments.get(RECURLY_FIXTURES.PAYMENT_ID, {
+        with: RELATIONS,
+      });
+
+      expect(client.listAccountTransactions).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.ACCOUNT_ID,
+        {
+          params: {
+            limit: 200,
+            type: 'refund',
+            beginTime: new Date('2026-01-01T00:00:00Z'),
+          },
+        },
+      );
+      expect(payment).toEqual(
+        RECURLY_FIXTURES.EXPECTED_PAYMENTS_WITH_RELATIONS[0],
+      );
+    });
+
+    it('should not list refunds when the payment was not refunded', async () => {
+      client.getTransaction.mockResolvedValue(
+        RECURLY_FIXTURES.DECLINED_TRANSACTION,
+      );
+
+      const payment = await payments.get('rec_txn_2', { with: RELATIONS });
+
+      expect(client.listAccountTransactions).not.toHaveBeenCalled();
+      expect(payment).toEqual(
+        RECURLY_FIXTURES.EXPECTED_PAYMENTS_WITH_RELATIONS[1],
+      );
+    });
+
+    it('should reject a relation Recurly does not support without calling Recurly', async () => {
+      await expect(
+        payments.get(RECURLY_FIXTURES.PAYMENT_ID, {
+          with: ['fees' as 'refunds'],
+        }),
+      ).rejects.toMatchObject({
+        constructor: UnsupportedOperationError,
+        provider: CashierProvider.Recurly,
+      });
+      expect(client.getTransaction).not.toHaveBeenCalled();
+    });
+
+    it('should map a missing transaction to NotFoundError', async () => {
+      client.getTransaction.mockRejectedValue(
+        withRecurlyStatus(
+          new recurly.errors.NotFoundError('Not found', 'not_found', {}),
+          404,
+        ),
+      );
+
+      await expect(
+        payments.get(RECURLY_FIXTURES.PAYMENT_ID),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
+  });
+
+  describe('paymentMethod', () => {
+    it('should map the card the transaction was charged to', async () => {
+      client.getTransaction.mockResolvedValue({
+        ...RECURLY_FIXTURES.DECLINED_TRANSACTION,
+        paymentMethod: {
+          object: 'apple_pay',
+          cardType: 'American Express',
+          lastFour: '0005',
+          expMonth: 3,
+          expYear: 2029,
+        },
+      });
+
+      const payment = await payments.get('rec_txn_2', {
+        with: ['paymentMethod'],
+      });
+
+      expect(payment.paymentMethod).toEqual({
+        type: 'card',
+        brand: 'amex',
+        last4: '0005',
+        expMonth: 3,
+        expYear: 2029,
+        wallet: 'apple_pay',
+      });
+    });
+
+    it('should be null when the transaction has no payment method', async () => {
+      client.getTransaction.mockResolvedValue(
+        RECURLY_FIXTURES.DECLINED_TRANSACTION,
+      );
+
+      const payment = await payments.get('rec_txn_2', {
+        with: ['paymentMethod'],
+      });
+
+      expect(payment.paymentMethod).toBeNull();
+    });
+  });
+
+  describe('timeline', () => {
+    it('should add the collection and the successful and pending refunds, sorted by date', async () => {
+      client.getTransaction.mockResolvedValue({
+        ...RECURLY_FIXTURES.SUCCESSFUL_TRANSACTION,
+        collectedAt: new Date('2026-01-01T00:05:00Z'),
+      });
+      client.listAccountTransactions.mockReturnValue(
+        createRecurlyPager([
+          {
+            ...RECURLY_FIXTURES.REFUNDS[1],
+            createdAt: new Date('2026-01-06T00:00:00Z'),
+          },
+          ...RECURLY_FIXTURES.REFUNDS,
+        ]),
+      );
+
+      const payment = await payments.get(RECURLY_FIXTURES.PAYMENT_ID, {
+        with: ['timeline'],
+      });
+
+      expect(payment).not.toHaveProperty('refunds');
+      expect(payment.timeline).toEqual([
+        {
+          type: 'created',
+          at: new Date('2026-01-01T00:00:00Z'),
+          amount: 12900,
+        },
+        {
+          type: 'succeeded',
+          at: new Date('2026-01-01T00:05:00Z'),
+          amount: 12900,
+        },
+        {
+          type: 'refunded',
+          at: new Date('2026-01-05T00:00:00Z'),
+          amount: 4000,
+        },
+        {
+          type: 'refunded',
+          at: new Date('2026-01-05T00:00:00Z'),
+          amount: 550,
+        },
+        {
+          type: 'refunded',
+          at: new Date('2026-01-06T00:00:00Z'),
+          amount: 550,
+        },
+      ]);
+    });
+
+    it('should use the creation date when a successful payment has no collection date', async () => {
+      client.getTransaction.mockResolvedValue({
+        ...RECURLY_FIXTURES.SUCCESSFUL_TRANSACTION,
+        refunded: false,
+      });
+
+      const payment = await payments.get(RECURLY_FIXTURES.PAYMENT_ID, {
+        with: ['timeline'],
+      });
+
+      expect(payment.timeline).toEqual([
+        {
+          type: 'created',
+          at: new Date('2026-01-01T00:00:00Z'),
+          amount: 12900,
+        },
+        {
+          type: 'succeeded',
+          at: new Date('2026-01-01T00:00:00Z'),
+          amount: 12900,
+        },
+      ]);
+    });
+
+    it('should add a failure for a declined payment and a cancellation when it was voided', async () => {
+      client.getTransaction.mockResolvedValue({
+        ...RECURLY_FIXTURES.DECLINED_TRANSACTION,
+        voidedAt: new Date('2026-01-03T00:00:00Z'),
+      });
+
+      const payment = await payments.get('rec_txn_2', { with: ['timeline'] });
+
+      expect(payment.timeline).toEqual([
+        {
+          type: 'created',
+          at: new Date('2026-01-02T00:00:00Z'),
+          amount: 5000,
+        },
+        {
+          type: 'failed',
+          at: new Date('2026-01-02T00:00:00Z'),
+          amount: 5000,
+        },
+        {
+          type: 'canceled',
+          at: new Date('2026-01-03T00:00:00Z'),
+          amount: null,
+        },
+      ]);
+    });
+
+    it('should only add the creation of a pending payment', async () => {
+      client.getTransaction.mockResolvedValue({
+        ...RECURLY_FIXTURES.DECLINED_TRANSACTION,
+        status: 'pending',
+      });
+
+      const payment = await payments.get('rec_txn_2', { with: ['timeline'] });
+
+      expect(payment.timeline).toEqual([
+        {
+          type: 'created',
+          at: new Date('2026-01-02T00:00:00Z'),
+          amount: 5000,
+        },
+      ]);
+    });
+  });
 });

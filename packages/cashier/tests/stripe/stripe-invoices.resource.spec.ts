@@ -3,6 +3,7 @@ import { StripeInvoicesResource } from '../../src/drivers/stripe/resources/strip
 import { NotFoundError } from '../../src/errors/not-found.error';
 import { PaymentFailedError } from '../../src/errors/payment-failed.error';
 import { UnsupportedOperationError } from '../../src/errors/unsupported-operation.error';
+import { ValidationError } from '../../src/errors/validation.error';
 import { STRIPE_FIXTURES } from '../fixtures/stripe.fixtures';
 import {
   StripeClientMock,
@@ -12,6 +13,56 @@ import {
 } from '../fixtures/stripe-client.mock';
 import { CashierProvider } from '../../src/types/cashier.types';
 import { CreateInvoiceParams } from '../../src/types/invoice.types';
+
+const createLine = (id: string, overrides: Record<string, unknown> = {}) => ({
+  id,
+  description: `Line ${id}`,
+  amount: 29900,
+  quantity: 1,
+  price: { id: 'price_123', unit_amount: 29900 },
+  subscription: 'sub_123',
+  period: { start: 1767225600, end: 1769904000 },
+  proration: false,
+  ...overrides,
+});
+
+const expectedLine = (id: string, overrides: Record<string, unknown> = {}) => ({
+  id,
+  description: `Line ${id}`,
+  amount: 29900,
+  quantity: 1,
+  unitAmount: 29900,
+  priceId: 'price_123',
+  subscriptionId: 'sub_123',
+  periodStart: new Date(1767225600 * 1000),
+  periodEnd: new Date(1769904000 * 1000),
+  proration: false,
+  ...overrides,
+});
+
+const UPCOMING_INVOICE = {
+  customer: 'cus_123',
+  currency: 'usd',
+  subtotal: 29900,
+  tax: null,
+  total: 29900,
+  amount_due: 27400,
+  next_payment_attempt: 1769904000,
+  lines: { data: [createLine('il_1')], has_more: false },
+};
+
+const EXPECTED_PREVIEW = {
+  customerId: 'cus_123',
+  subscriptionId: 'sub_123',
+  currency: 'USD',
+  subtotal: 29900,
+  tax: 0,
+  total: 29900,
+  amountDue: 27400,
+  lineItems: [expectedLine('il_1')],
+  nextPaymentAt: new Date(1769904000 * 1000),
+  provider: CashierProvider.Stripe,
+};
 
 describe('StripeInvoicesResource', () => {
   let client: StripeClientMock;
@@ -59,7 +110,7 @@ describe('StripeInvoicesResource', () => {
     it('should reject a relation Stripe does not support without calling Stripe', async () => {
       await expect(
         invoices.get(STRIPE_FIXTURES.INVOICE_ID, {
-          with: ['payments' as 'refunds'],
+          with: ['charges' as 'refunds'],
         }),
       ).rejects.toBeInstanceOf(UnsupportedOperationError);
       expect(client.invoices.retrieve).not.toHaveBeenCalled();
@@ -533,6 +584,407 @@ describe('StripeInvoicesResource', () => {
         NotFoundError,
       );
       expect(client.invoiceItems.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('new relations', () => {
+    const getWith = (
+      overrides: Record<string, unknown>,
+      relations: readonly (
+        'lineItems' | 'payments' | 'startingBalance' | 'timeline'
+      )[],
+    ) => {
+      client.invoices.retrieve.mockResolvedValue({
+        ...STRIPE_FIXTURES.SUBSCRIPTION_INVOICE,
+        ...overrides,
+      });
+
+      return invoices.get(STRIPE_FIXTURES.INVOICE_ID, { with: relations });
+    };
+
+    it('should map the line items without another request when they fit', async () => {
+      const invoice = await getWith(
+        {
+          lines: {
+            data: [
+              createLine('il_1'),
+              createLine('il_2', {
+                description: null,
+                quantity: null,
+                price: null,
+                subscription: null,
+                period: null,
+                proration: true,
+                amount: -1000,
+              }),
+            ],
+            has_more: false,
+          },
+        },
+        ['lineItems'],
+      );
+
+      expect(client.invoices.retrieve).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.INVOICE_ID,
+        {},
+      );
+      expect(client.invoices.listLineItems).not.toHaveBeenCalled();
+      expect(invoice.lineItems).toEqual([
+        expectedLine('il_1'),
+        expectedLine('il_2', {
+          description: null,
+          quantity: null,
+          unitAmount: null,
+          priceId: null,
+          subscriptionId: null,
+          periodStart: null,
+          periodEnd: null,
+          proration: true,
+          amount: -1000,
+        }),
+      ]);
+    });
+
+    it('should page through the remaining line items', async () => {
+      client.invoices.listLineItems
+        .mockResolvedValueOnce({ data: [createLine('il_2')], has_more: true })
+        .mockResolvedValueOnce({ data: [createLine('il_3')], has_more: false });
+
+      const invoice = await getWith(
+        { lines: { data: [createLine('il_1')], has_more: true } },
+        ['lineItems'],
+      );
+
+      expect(client.invoices.listLineItems).toHaveBeenNthCalledWith(
+        1,
+        STRIPE_FIXTURES.INVOICE_ID,
+        { limit: 100, starting_after: 'il_1' },
+      );
+      expect(client.invoices.listLineItems).toHaveBeenNthCalledWith(
+        2,
+        STRIPE_FIXTURES.INVOICE_ID,
+        { limit: 100, starting_after: 'il_2' },
+      );
+      expect(invoice.lineItems?.map((lineItem) => lineItem.id)).toEqual([
+        'il_1',
+        'il_2',
+        'il_3',
+      ]);
+    });
+
+    it('should not page line items unless they are requested', async () => {
+      await getWith({ lines: { data: [createLine('il_1')], has_more: true } }, [
+        'timeline',
+      ]);
+
+      expect(client.invoices.listLineItems).not.toHaveBeenCalled();
+    });
+
+    it('should have no line items when Stripe returns none', async () => {
+      const invoice = await getWith({ lines: undefined }, ['lineItems']);
+
+      expect(invoice.lineItems).toEqual([]);
+    });
+
+    it('should expand the payment intent and map it as the payment', async () => {
+      const invoice = await getWith(
+        { payment_intent: STRIPE_FIXTURES.SUCCEEDED_PAYMENT_INTENT },
+        ['payments'],
+      );
+
+      expect(client.invoices.retrieve).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.INVOICE_ID,
+        { expand: ['payment_intent'] },
+      );
+      expect(invoice.payments).toEqual([STRIPE_FIXTURES.EXPECTED_PAYMENTS[0]]);
+    });
+
+    it.each([
+      ['there is no payment intent', null],
+      ['the payment intent is not expanded', 'pi_123'],
+    ])('should have no payments when %s', async (_case, paymentIntent) => {
+      const invoice = await getWith({ payment_intent: paymentIntent }, [
+        'payments',
+      ]);
+
+      expect(invoice.payments).toEqual([]);
+    });
+
+    it('should add the starting balance', async () => {
+      const invoice = await getWith({ starting_balance: -2500 }, [
+        'startingBalance',
+      ]);
+
+      expect(invoice.startingBalance).toBe(-2500);
+    });
+
+    it('should list the creation and every status transition in time order', async () => {
+      const invoice = await getWith(
+        {
+          created: 1767225600,
+          status_transitions: {
+            finalized_at: 1767229200,
+            paid_at: null,
+            voided_at: 1767400000,
+            marked_uncollectible_at: 1767300000,
+          },
+        },
+        ['timeline'],
+      );
+
+      expect(invoice.timeline).toEqual([
+        { type: 'created', at: new Date(1767225600 * 1000) },
+        { type: 'finalized', at: new Date(1767229200 * 1000) },
+        { type: 'uncollectible', at: new Date(1767300000 * 1000) },
+        { type: 'voided', at: new Date(1767400000 * 1000) },
+      ]);
+    });
+
+    it("should list the invoices and page each one's line items", async () => {
+      client.invoices.list.mockResolvedValue({
+        data: [
+          {
+            ...STRIPE_FIXTURES.SUBSCRIPTION_INVOICE,
+            lines: { data: [createLine('il_1')], has_more: true },
+          },
+        ],
+        has_more: false,
+      });
+      client.invoices.listLineItems.mockResolvedValue({
+        data: [createLine('il_2')],
+        has_more: false,
+      });
+
+      const [invoice] = await invoices.list({
+        customer: STRIPE_FIXTURES.CUSTOMER_ID,
+        with: ['lineItems', 'payments'],
+      });
+
+      expect(client.invoices.list).toHaveBeenCalledWith({
+        customer: STRIPE_FIXTURES.CUSTOMER_ID,
+        limit: 100,
+        expand: ['data.payment_intent'],
+      });
+      expect(invoice?.lineItems?.map((lineItem) => lineItem.id)).toEqual([
+        'il_1',
+        'il_2',
+      ]);
+    });
+  });
+
+  describe('subscription filter', () => {
+    beforeEach(() => {
+      client.invoices.list.mockResolvedValue({ data: [], has_more: false });
+    });
+
+    it('should list a subscription invoices without a customer', async () => {
+      await invoices.list({ subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID });
+
+      expect(client.invoices.list).toHaveBeenCalledWith({
+        subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        limit: 100,
+      });
+    });
+
+    it('should pass both the customer and the subscription', async () => {
+      await invoices.cursorPaginate({
+        customer: STRIPE_FIXTURES.CUSTOMER_ID,
+        subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        perPage: 10,
+        cursor: 'in_999',
+      });
+
+      expect(client.invoices.list).toHaveBeenCalledWith({
+        customer: STRIPE_FIXTURES.CUSTOMER_ID,
+        subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        limit: 10,
+        starting_after: 'in_999',
+      });
+    });
+
+    it.each([
+      ['list', () => invoices.list({} as { customer: string })],
+      [
+        'cursorPaginate',
+        () => invoices.cursorPaginate({} as { customer: string }),
+      ],
+    ])(
+      'should reject %s without a customer or a subscription',
+      async (_method, call) => {
+        await expect(call()).rejects.toMatchObject({
+          constructor: ValidationError,
+          provider: CashierProvider.Stripe,
+        });
+        expect(client.invoices.list).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  describe('preview', () => {
+    it('should preview the next invoice of the subscription', async () => {
+      client.invoices.retrieveUpcoming.mockResolvedValue(UPCOMING_INVOICE);
+
+      const preview = await invoices.preview({
+        subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID,
+      });
+
+      expect(client.subscriptions.retrieve).not.toHaveBeenCalled();
+      expect(client.invoices.retrieveUpcoming).toHaveBeenCalledWith({
+        subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID,
+      });
+      expect(client.invoices.listUpcomingLines).not.toHaveBeenCalled();
+      expect(preview).toEqual(EXPECTED_PREVIEW);
+    });
+
+    it('should preview a price and quantity change on the single item', async () => {
+      client.subscriptions.retrieve.mockResolvedValue(
+        STRIPE_FIXTURES.SUBSCRIPTION,
+      );
+      client.invoices.retrieveUpcoming.mockResolvedValue(UPCOMING_INVOICE);
+
+      await invoices.preview({
+        subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        price: STRIPE_FIXTURES.NEW_PRICE_ID,
+        quantity: 2,
+        proration: 'prorate',
+      });
+
+      expect(client.subscriptions.retrieve).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+      );
+      expect(client.invoices.retrieveUpcoming).toHaveBeenCalledWith({
+        subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        subscription_items: [
+          { id: 'si_123', price: STRIPE_FIXTURES.NEW_PRICE_ID, quantity: 2 },
+        ],
+        subscription_proration_behavior: 'create_prorations',
+      });
+    });
+
+    it.each([
+      ['prorate', 'create_prorations'],
+      ['none', 'none'],
+      ['invoiceNow', 'always_invoice'],
+    ] as const)(
+      'should map the %s proration to %s',
+      async (proration, behavior) => {
+        client.invoices.retrieveUpcoming.mockResolvedValue(UPCOMING_INVOICE);
+
+        await invoices.preview({
+          subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID,
+          proration,
+        });
+
+        expect(client.invoices.retrieveUpcoming).toHaveBeenCalledWith({
+          subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID,
+          subscription_proration_behavior: behavior,
+        });
+      },
+    );
+
+    it('should reject a price change on a multi-item subscription', async () => {
+      client.subscriptions.retrieve.mockResolvedValue(
+        STRIPE_FIXTURES.MULTI_ITEM_SUBSCRIPTION,
+      );
+
+      await expect(
+        invoices.preview({
+          subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID,
+          quantity: 2,
+        }),
+      ).rejects.toBeInstanceOf(ValidationError);
+      expect(client.invoices.retrieveUpcoming).not.toHaveBeenCalled();
+    });
+
+    it('should page through the remaining upcoming lines with the same parameters', async () => {
+      client.invoices.retrieveUpcoming.mockResolvedValue({
+        ...UPCOMING_INVOICE,
+        lines: { data: [createLine('il_1')], has_more: true },
+      });
+      client.invoices.listUpcomingLines.mockResolvedValue({
+        data: [createLine('il_2')],
+        has_more: false,
+      });
+
+      const preview = await invoices.preview({
+        subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        proration: 'none',
+      });
+
+      expect(client.invoices.listUpcomingLines).toHaveBeenCalledWith({
+        subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        subscription_proration_behavior: 'none',
+        limit: 100,
+        starting_after: 'il_1',
+      });
+      expect(preview.lineItems).toEqual([
+        expectedLine('il_1'),
+        expectedLine('il_2'),
+      ]);
+    });
+
+    it('should throw NotFoundError when the subscription does not exist', async () => {
+      client.invoices.retrieveUpcoming.mockRejectedValue(
+        createStripeMissingResourceError(),
+      );
+
+      await expect(
+        invoices.preview({ subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID }),
+      ).rejects.toMatchObject({
+        constructor: NotFoundError,
+        provider: CashierProvider.Stripe,
+      });
+    });
+  });
+
+  describe('sendReceipt', () => {
+    const mockInvoice = (overrides: Record<string, unknown> = {}) =>
+      client.invoices.retrieve.mockResolvedValue({
+        ...STRIPE_FIXTURES.SUBSCRIPTION_INVOICE,
+        charge: 'ch_123',
+        customer_email: 'jane@example.com',
+        ...overrides,
+      });
+
+    it('should send the receipt of the paid invoice charge to the given email', async () => {
+      mockInvoice();
+
+      await invoices.sendReceipt(STRIPE_FIXTURES.INVOICE_ID, {
+        email: 'billing@example.com',
+      });
+
+      expect(client.invoices.retrieve).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.INVOICE_ID,
+      );
+      expect(client.charges.update).toHaveBeenCalledWith('ch_123', {
+        receipt_email: 'billing@example.com',
+      });
+    });
+
+    it('should fall back to the invoice customer email', async () => {
+      mockInvoice({ charge: { id: 'ch_456' } });
+
+      await invoices.sendReceipt(STRIPE_FIXTURES.INVOICE_ID);
+
+      expect(client.charges.update).toHaveBeenCalledWith('ch_456', {
+        receipt_email: 'jane@example.com',
+      });
+    });
+
+    it.each([
+      ['the invoice is not paid', { status: 'open' }],
+      ['the invoice has no charge', { charge: null }],
+      ['there is no email', { customer_email: null }],
+    ])('should throw ValidationError when %s', async (_case, overrides) => {
+      mockInvoice(overrides);
+
+      await expect(
+        invoices.sendReceipt(STRIPE_FIXTURES.INVOICE_ID),
+      ).rejects.toMatchObject({
+        constructor: ValidationError,
+        provider: CashierProvider.Stripe,
+      });
+      expect(client.charges.update).not.toHaveBeenCalled();
     });
   });
 });

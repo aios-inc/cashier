@@ -10,7 +10,10 @@ import { PaymentMethodError } from '../../errors/payment-method.error';
 import { ProviderError } from '../../errors/provider.error';
 import { RateLimitError } from '../../errors/rate-limit.error';
 import { ValidationError } from '../../errors/validation.error';
-import { STRIPE_PAYMENT_METHOD_ERROR_CODES } from '../../constants/cashier.constants';
+import {
+  STRIPE_PAYMENT_METHOD_ERROR_CODES,
+  STRIPE_PAYMENT_METHOD_PARAMS,
+} from '../../constants/cashier.constants';
 import {
   createErrorFromHttpStatus,
   getErrorMessage,
@@ -32,7 +35,9 @@ const mapStripeInvalidRequestError = (
   details: CashierErrorDetails,
 ): CashierError => {
   if (error.code === 'resource_missing') {
-    return new NotFoundError(error.message, details);
+    return STRIPE_PAYMENT_METHOD_PARAMS.has(error.param ?? '')
+      ? new PaymentMethodError(error.message, details)
+      : new NotFoundError(error.message, details);
   }
 
   if (error.code === 'lock_timeout') {

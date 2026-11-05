@@ -19,28 +19,31 @@ On Stripe the SDK is created with API version `2023-08-16`, the version the mapp
 
 ## What a driver has
 
-| Property        | Type                    | Reference                         |
-| --------------- | ----------------------- | --------------------------------- |
-| `provider`      | `CashierProvider`       | The provider behind the driver.   |
-| `customers`     | `CustomersResource`     | [Customers](customers.md)         |
-| `invoices`      | `InvoicesResource`      | [Invoices](invoices.md)           |
-| `payments`      | `PaymentsResource`      | [Payments](payments.md)           |
-| `products`      | `ProductsResource`      | [Products](products.md)           |
-| `prices`        | `PricesResource`        | [Prices](prices.md)               |
-| `subscriptions` | `SubscriptionsResource` | [Subscriptions](subscriptions.md) |
+| Property         | Type                     | Reference                                         |
+| ---------------- | ------------------------ | ------------------------------------------------- |
+| `provider`       | `CashierProvider`        | The provider behind the driver.                   |
+| `customers`      | `CustomersResource`      | [Customers](customers.md)                         |
+| `invoices`       | `InvoicesResource`       | [Invoices](invoices.md)                           |
+| `payments`       | `PaymentsResource`       | [Payments](payments.md)                           |
+| `paymentMethods` | `PaymentMethodsResource` | [Payment methods](payment-methods.md)             |
+| `products`       | `ProductsResource`       | [Products](products.md)                           |
+| `prices`         | `PricesResource`         | [Prices](prices.md)                               |
+| `subscriptions`  | `SubscriptionsResource`  | [Subscriptions](subscriptions.md)                 |
+| `account`        | `AccountResource`        | [Account](account.md). Only on the Stripe driver. |
 
 Every method returns a promise. When it fails, it rejects with a subclass of `CashierError`. See [Errors](errors.md).
 
 ## How providers map to Cashier
 
-| Cashier      | Stripe        | Recurly                                        |
-| ------------ | ------------- | ---------------------------------------------- |
-| Customer     | Customer      | Account                                        |
-| Invoice      | Invoice       | Invoice                                        |
-| Payment      | PaymentIntent | Transaction (`purchase` and `capture`)         |
-| Product      | Product       | Plan                                           |
-| Price        | Price         | Not available. Pricing is defined on the plan. |
-| Subscription | Subscription  | Subscription, with a single item for its plan  |
+| Cashier        | Stripe        | Recurly                                        |
+| -------------- | ------------- | ---------------------------------------------- |
+| Customer       | Customer      | Account                                        |
+| Invoice        | Invoice       | Invoice                                        |
+| Payment        | PaymentIntent | Transaction (`purchase` and `capture`)         |
+| Payment method | PaymentMethod | Billing info                                   |
+| Product        | Product       | Plan                                           |
+| Price          | Price         | Not available. Pricing is defined on the plan. |
+| Subscription   | Subscription  | Subscription, with a single item for its plan  |
 
 ## Conventions
 

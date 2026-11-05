@@ -2,12 +2,47 @@
 
 `driver.payments` charges a customer's saved payment method, lists their payments, the charges made against their payment method whether they succeeded or not, and refunds them.
 
+- [`payments.get(paymentId, params?)`](#paymentsgetpaymentid-params)
 - [`payments.list(params)`](#paymentslistparams)
 - [`payments.cursorPaginate(params)`](#paymentscursorpaginateparams)
 - [`payments.create(params)`](#paymentscreateparams)
 - [`payments.refund(paymentId, params?)`](#paymentsrefundpaymentid-params)
+- [`payments.sendReceipt(paymentId, params?)`](#paymentssendreceiptpaymentid-params)
 - [Loading relations with `with`](#loading-relations-with-with)
 - [The `Payment` object](#the-payment-object)
+
+## `payments.get(paymentId, params?)`
+
+Returns one payment, with the relations you ask for.
+
+```ts
+const payment = await cashier
+  .use(CashierProvider.Stripe)
+  .payments.get('pi_123', {
+    with: [
+      'paymentMethod',
+      'refunds',
+      'fees',
+      'statementDescriptor',
+      'timeline',
+    ],
+  });
+
+payment.paymentMethod?.last4;
+payment.refunds;
+payment.fee;
+```
+
+| Parameter | Type                | Description                                                               |
+| --------- | ------------------- | ------------------------------------------------------------------------- |
+| `with`    | `PaymentRelation[]` | Relations to load. See [Loading relations](#loading-relations-with-with). |
+
+| Provider | Behavior                                                                                                                              |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Stripe   | Retrieves the PaymentIntent, with the expansions the relations need.                                                                  |
+| Recurly  | Retrieves the transaction. `refunds` and `timeline` list the account's refunds since the payment, only when the payment was refunded. |
+
+A payment that does not exist rejects with `NotFoundError`.
 
 ## `payments.list(params)`
 
@@ -166,6 +201,29 @@ On Recurly, the refund is read from the credit invoice that `refundInvoice` retu
 | `canceled`  | `canceled`                   | `void`                               |
 | `unknown`   | Any other status             | Any other status                     |
 
+## `payments.sendReceipt(paymentId, params?)`
+
+Emails the customer the receipt of a successful payment. Only the Stripe driver has it.
+
+```ts
+await cashier.use(CashierProvider.Stripe).payments.sendReceipt('pi_123');
+
+await cashier
+  .use(CashierProvider.Stripe)
+  .payments.sendReceipt('pi_123', { email: 'billing@example.com' });
+```
+
+| Parameter | Type     | Description                                                                                |
+| --------- | -------- | ------------------------------------------------------------------------------------------ |
+| `email`   | `string` | Where to send it. Defaults to the payment's `receipt_email`, then to the customer's email. |
+
+| Provider | Behavior                                                                                                                                                                                        |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stripe   | Sets `receipt_email` on the payment's latest charge, which makes Stripe send the receipt, even when receipts are turned off in your email settings. Stripe does not send receipts in test mode. |
+| Recurly  | Not available. Recurly's API cannot send a receipt, so `sendReceipt` does not compile on the Recurly driver. See [Provider-only methods](typescript.md#provider-only-methods).                  |
+
+A payment that has not succeeded, or that has no email to send to, rejects with `ValidationError`. To send the receipt of an invoice, see [`invoices.sendReceipt`](invoices.md#invoicessendreceiptinvoiceid-params).
+
 ## Loading relations with `with`
 
 A payment has only its own fields by default. Pass `with` to load related data, as with Eloquent's `with`. Each relation adds one field, and costs only what it needs:
@@ -183,23 +241,27 @@ payments.data[0].amountRefunded;
 payments.data[0].dispute;
 ```
 
-| Relation       | Adds             | Stripe                          | Recurly                                                                                 |
-| -------------- | ---------------- | ------------------------------- | --------------------------------------------------------------------------------------- |
-| `refunds`      | `amountRefunded` | Expands `latest_charge`         | One more request for the account's refunds, only when a payment on the page is refunded |
-| `dispute`      | `dispute`        | Expands `latest_charge.dispute` | Not available                                                                           |
-| `receipt`      | `receiptUrl`     | Expands `latest_charge`         | Not available                                                                           |
-| `reversal`     | `reversed`       | Expands `latest_charge.refunds` | Not available                                                                           |
-| `subscription` | `subscription`   | Expands `invoice.subscription`  | No extra cost                                                                           |
+| Relation              | Adds                        | Stripe                                                      | Recurly                                                                                 |
+| --------------------- | --------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `refunds`             | `amountRefunded`, `refunds` | Expands `latest_charge.refunds`                             | One more request for the account's refunds, only when a payment on the page is refunded |
+| `dispute`             | `dispute`                   | Expands `latest_charge.dispute`                             | Not available                                                                           |
+| `receipt`             | `receiptUrl`                | Expands `latest_charge`                                     | Not available                                                                           |
+| `reversal`            | `reversed`                  | Expands `latest_charge.refunds`                             | Not available                                                                           |
+| `subscription`        | `subscription`              | Expands `invoice.subscription`                              | No extra cost                                                                           |
+| `paymentMethod`       | `paymentMethod`             | Expands `latest_charge`                                     | No extra cost                                                                           |
+| `fees`                | `fee`, `net`                | Expands `latest_charge.balance_transaction`                 | Not available                                                                           |
+| `statementDescriptor` | `statementDescriptor`       | Expands `latest_charge`                                     | Not available                                                                           |
+| `timeline`            | `timeline`                  | Expands `latest_charge.refunds` and `latest_charge.dispute` | The same refunds request as `refunds`                                                   |
 
 Stripe expansions are part of the same request, so they make the response bigger but add no requests. On Recurly, the refunds request lists the account's `refund` transactions created since the oldest refunded payment on the page.
 
 The relations each provider supports are typed in `CashierPaymentRelations`, so the compiler only accepts what the driver can load:
 
-| Driver                                              | Accepted relations                                               |
-| --------------------------------------------------- | ---------------------------------------------------------------- |
-| `cashier.use(CashierProvider.Stripe)`               | `refunds`, `dispute`, `receipt`, `reversal`, `subscription`      |
-| `cashier.use(CashierProvider.Recurly)`              | `refunds`, `subscription`                                        |
-| `cashier.use()`, or `use(provider)` with a variable | The relations every provider supports: `refunds`, `subscription` |
+| Driver                                              | Accepted relations                                                                                                      |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `cashier.use(CashierProvider.Stripe)`               | `refunds`, `dispute`, `receipt`, `reversal`, `subscription`, `paymentMethod`, `fees`, `statementDescriptor`, `timeline` |
+| `cashier.use(CashierProvider.Recurly)`              | `refunds`, `subscription`, `paymentMethod`, `timeline`                                                                  |
+| `cashier.use()`, or `use(provider)` with a variable | The relations every provider supports: `refunds`, `subscription`, `paymentMethod`, `timeline`                           |
 
 The result type only has the fields you loaded, so reading `receiptUrl` without `with: ['receipt']` does not compile. When a relation reaches a driver that cannot load it, for example from plain JavaScript, the call rejects with `UnsupportedOperationError` before any request is made.
 
@@ -219,15 +281,36 @@ The result type only has the fields you loaded, so reading `receiptUrl` without 
 
 These fields are added by `with`:
 
-| Field            | Type                          | Relation       | Stripe                                                                                  | Recurly                                                                                                          |
-| ---------------- | ----------------------------- | -------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `amountRefunded` | `number`                      | `refunds`      | The latest charge's `amount_refunded`                                                   | The sum of the account's successful and pending `refund` transactions whose original transaction is this payment |
-| `dispute`        | `PaymentDispute \| null`      | `dispute`      | The latest charge's dispute                                                             |                                                                                                                  |
-| `receiptUrl`     | `string \| null`              | `receipt`      | The latest charge's `receipt_url`                                                       |                                                                                                                  |
-| `reversed`       | `boolean`                     | `reversal`     | `true` when one of the latest charge's refunds has the card destination type `reversal` |                                                                                                                  |
-| `subscription`   | `PaymentSubscription \| null` | `subscription` | The invoice's subscription, with its `status` and `cancelAt`                            | The transaction's first subscription id, with `status` and `cancelAt` set to `null`                              |
+| Field                 | Type                           | Relation              | Stripe                                                                                               | Recurly                                                                                                          |
+| --------------------- | ------------------------------ | --------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `amountRefunded`      | `number`                       | `refunds`             | The latest charge's `amount_refunded`                                                                | The sum of the account's successful and pending `refund` transactions whose original transaction is this payment |
+| `dispute`             | `PaymentDispute \| null`       | `dispute`             | The latest charge's dispute                                                                          |                                                                                                                  |
+| `receiptUrl`          | `string \| null`               | `receipt`             | The latest charge's `receipt_url`                                                                    |                                                                                                                  |
+| `reversed`            | `boolean`                      | `reversal`            | `true` when one of the latest charge's refunds has the card destination type `reversal`              |                                                                                                                  |
+| `subscription`        | `PaymentSubscription \| null`  | `subscription`        | The invoice's subscription, with its `status` and `cancelAt`                                         | The transaction's first subscription id, with `status` and `cancelAt` set to `null`                              |
+| `refunds`             | `Refund[]`                     | `refunds`             | The latest charge's refunds, in every status                                                         | The account's `refund` transactions whose original transaction is this payment, in every status                  |
+| `paymentMethod`       | `PaymentMethodDetails \| null` | `paymentMethod`       | The latest charge's `payment_method_details`. `null` when nothing was charged yet                    | The transaction's payment method                                                                                 |
+| `fee`                 | `number \| null`               | `fees`                | The fee of the latest charge's balance transaction. `null` before the charge settles                 |                                                                                                                  |
+| `net`                 | `number \| null`               | `fees`                | What you keep after the fee. `null` before the charge settles                                        |                                                                                                                  |
+| `statementDescriptor` | `string \| null`               | `statementDescriptor` | The latest charge's `calculated_statement_descriptor`, or the PaymentIntent's `statement_descriptor` |                                                                                                                  |
+| `timeline`            | `PaymentEvent[]`               | `timeline`            | See below                                                                                            | See below                                                                                                        |
 
-Amounts are in minor units. `amountRefunded` is `0` when nothing was refunded.
+Amounts are in minor units. `amountRefunded` is `0` when nothing was refunded. `PaymentMethodDetails` is described in [Payment methods](payment-methods.md#the-paymentmethod-object).
+
+### The payment timeline
+
+`timeline` is what happened to the payment, oldest first. Each `PaymentEvent` has a `type`, the date it happened `at`, and an `amount` in minor units, which is `null` for `canceled`.
+
+| `type`      | Stripe                                           | Recurly                                       |
+| ----------- | ------------------------------------------------ | --------------------------------------------- |
+| `created`   | The PaymentIntent was created                    | The transaction was created                   |
+| `succeeded` | The latest charge succeeded                      | The transaction succeeded, at `collected_at`  |
+| `failed`    | The latest charge failed                         | The transaction was declined or errored       |
+| `refunded`  | Each succeeded or pending refund                 | Each successful or pending refund transaction |
+| `disputed`  | The latest charge was disputed                   |                                               |
+| `canceled`  | The PaymentIntent was canceled, at `canceled_at` | The transaction was voided, at `voided_at`    |
+
+Stripe only keeps the latest charge on a PaymentIntent, so earlier failed attempts of a payment that later succeeded are not in its timeline.
 
 ### Payment status
 

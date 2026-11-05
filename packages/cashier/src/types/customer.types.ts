@@ -1,4 +1,5 @@
 import { CashierProvider } from './cashier.types';
+import { LoadedRelations, WithParams } from './relation.types';
 
 export interface Customer {
   id: string;
@@ -8,6 +9,39 @@ export interface Customer {
   metadata: Record<string, string>;
   createdAt: Date;
   provider: CashierProvider;
+}
+
+export interface CustomerBalance {
+  currency: string;
+  amount: number;
+}
+
+export interface CustomerRelationFields {
+  balances: { balances: CustomerBalance[] };
+}
+
+export type CustomerRelation = keyof CustomerRelationFields;
+
+export type CustomerWith<Relation extends CustomerRelation = never> = Customer &
+  LoadedRelations<CustomerRelationFields, Relation>;
+
+export type GetCustomerParams<Relation extends CustomerRelation = never> =
+  WithParams<Relation>;
+
+export interface BalanceTransaction {
+  id: string;
+  customerId: string | null;
+  amount: number;
+  currency: string;
+  description: string | null;
+  createdAt: Date;
+  provider: CashierProvider;
+}
+
+export interface AdjustBalanceParams {
+  amount: number;
+  currency: string;
+  description?: string;
 }
 
 export interface ListCustomersParams {
@@ -28,11 +62,23 @@ export interface UpdateCustomerParams {
   firstName?: string;
   lastName?: string;
   metadata?: Record<string, string>;
+  defaultPaymentMethod?: string;
 }
 
 export interface CustomersResource {
-  get(customerId: string): Promise<Customer>;
+  get<Relation extends CustomerRelation = never>(
+    customerId: string,
+    params?: GetCustomerParams<Relation>,
+  ): Promise<CustomerWith<Relation>>;
   list(params?: ListCustomersParams): Promise<Customer[]>;
   create(params: CreateCustomerParams): Promise<Customer>;
   update(customerId: string, params: UpdateCustomerParams): Promise<Customer>;
+  creditBalance(
+    customerId: string,
+    params: AdjustBalanceParams,
+  ): Promise<BalanceTransaction>;
+  debitBalance(
+    customerId: string,
+    params: AdjustBalanceParams,
+  ): Promise<BalanceTransaction>;
 }

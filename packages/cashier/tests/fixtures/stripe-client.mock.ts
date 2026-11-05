@@ -6,6 +6,14 @@ export const createStripeClientMock = () => ({
     list: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
+    listPaymentMethods: jest.fn(),
+    createBalanceTransaction: jest.fn(),
+  },
+  accounts: {
+    retrieve: jest.fn(),
+  },
+  charges: {
+    update: jest.fn(),
   },
   invoices: {
     retrieve: jest.fn(),
@@ -14,6 +22,9 @@ export const createStripeClientMock = () => ({
     finalizeInvoice: jest.fn(),
     pay: jest.fn(),
     voidInvoice: jest.fn(),
+    retrieveUpcoming: jest.fn(),
+    listUpcomingLines: jest.fn(),
+    listLineItems: jest.fn(),
   },
   invoiceItems: {
     create: jest.fn(),
@@ -21,6 +32,7 @@ export const createStripeClientMock = () => ({
   paymentIntents: {
     list: jest.fn(),
     create: jest.fn(),
+    retrieve: jest.fn(),
   },
   refunds: {
     create: jest.fn(),
@@ -53,4 +65,14 @@ export const createStripeMissingResourceError = () =>
     code: 'resource_missing',
     message: 'No such resource',
     statusCode: 404,
+  } as Stripe.StripeRawError);
+
+export const createStripeMissingPaymentMethodError = (param: string) =>
+  new Stripe.errors.StripeInvalidRequestError({
+    type: 'invalid_request_error',
+    code: 'resource_missing',
+    param,
+    message:
+      'The customer does not have a payment method with the ID pm_123. The payment method must be attached to the customer.',
+    statusCode: 400,
   } as Stripe.StripeRawError);

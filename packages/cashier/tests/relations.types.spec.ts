@@ -103,6 +103,88 @@ const checkSubscriptionRelations = async (cashier: Cashier) => {
   return { productName, cancelAt };
 };
 
+const checkProviderMethods = async (
+  cashier: Cashier,
+  provider: CashierProvider,
+) => {
+  const stripe = cashier.use(CashierProvider.Stripe);
+  const account = await stripe.account.get();
+  const statementDescriptor: string | null = account.statementDescriptor;
+
+  await stripe.payments.sendReceipt('pi_123');
+  await stripe.invoices.sendReceipt('in_123', { email: 'jane@example.com' });
+
+  const payment = await stripe.payments.get('pi_123', {
+    with: ['fees', 'statementDescriptor', 'paymentMethod', 'timeline'],
+  });
+  const fee: number | null = payment.fee;
+  const brand: string | null | undefined = payment.paymentMethod?.brand;
+
+  const invoice = await stripe.invoices.get('in_123', {
+    with: ['startingBalance', 'lineItems'],
+  });
+  const startingBalance: number = invoice.startingBalance;
+
+  const recurly = cashier.use(CashierProvider.Recurly);
+
+  // @ts-expect-error Recurly has no account resource
+  void recurly.account;
+
+  // @ts-expect-error Recurly cannot send receipts
+  void recurly.payments.sendReceipt;
+
+  // @ts-expect-error Recurly cannot send receipts
+  void recurly.invoices.sendReceipt;
+
+  // @ts-expect-error Recurly has no fees
+  await recurly.payments.get('rec_txn_1', { with: ['fees'] });
+
+  // @ts-expect-error Recurly has no starting balance
+  await recurly.invoices.get('rec_inv_1', { with: ['startingBalance'] });
+
+  // @ts-expect-error the account is not available on every provider
+  void cashier.use().account;
+
+  // @ts-expect-error receipts are not available on every provider
+  void cashier.use(provider).payments.sendReceipt;
+
+  const [paymentMethod] = await cashier
+    .use()
+    .paymentMethods.list({ customer: 'cus_123' });
+  const isDefault: boolean | undefined = paymentMethod?.isDefault;
+
+  const customer = await cashier
+    .use()
+    .customers.get('cus_123', { with: ['balances'] });
+  const balance: number | undefined = customer.balances[0]?.amount;
+
+  const subscription = await cashier.use().subscriptions.get('sub_123', {
+    with: ['paymentMethod', 'latestInvoice'],
+  });
+  const last4: string | null | undefined = subscription.paymentMethod?.last4;
+  const latestInvoiceTotal: number | undefined =
+    subscription.latestInvoice?.total;
+
+  // @ts-expect-error the latest invoice was not loaded
+  void (await cashier.use().subscriptions.get('sub_123')).latestInvoice;
+
+  await cashier.use().invoices.list({ subscription: 'sub_123' });
+
+  // @ts-expect-error a customer or a subscription is required
+  await cashier.use().invoices.list({ status: 'paid' });
+
+  return {
+    statementDescriptor,
+    fee,
+    brand,
+    startingBalance,
+    isDefault,
+    balance,
+    last4,
+    latestInvoiceTotal,
+  };
+};
+
 describe('relation types', () => {
   it('should only accept the relations each provider supports', () => {
     const cashier = new Cashier({
@@ -114,7 +196,8 @@ describe('relation types', () => {
       checkRecurlyRelations,
       checkDefaultRelations,
       checkSubscriptionRelations,
-    ]).toHaveLength(4);
+      checkProviderMethods,
+    ]).toHaveLength(5);
     expect(cashier.use(CashierProvider.Stripe).provider).toBe(
       CashierProvider.Stripe,
     );

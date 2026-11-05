@@ -1,5 +1,6 @@
 import Stripe from 'stripe';
 import { CashierProvider } from '../../../types/cashier.types';
+import { Invoice } from '../../../types/invoice.types';
 import {
   Subscription,
   SubscriptionDiscount,
@@ -13,8 +14,11 @@ import {
 import {
   fromUnixSeconds,
   getExpandableId,
+  getExpanded,
   toStripeInterval,
 } from './stripe-mapper.utils';
+import { mapStripeInvoice } from './stripe-invoice.mapper';
+import { mapStripeSubscriptionPaymentMethod } from './stripe-payment-method.mapper';
 
 const mapStripeSubscriptionItem = (
   item: Stripe.SubscriptionItem,
@@ -44,6 +48,26 @@ const mapStripeSubscriptionDiscount = (
       }
     : null;
 
+const getStripeSubscriptionPaymentMethod = (
+  subscription: Stripe.Subscription,
+): string | Stripe.PaymentMethod | null => {
+  const customer = getExpanded(subscription.customer);
+  const customerDefault =
+    customer && !customer.deleted
+      ? customer.invoice_settings?.default_payment_method
+      : null;
+
+  return subscription.default_payment_method ?? customerDefault ?? null;
+};
+
+const mapStripeLatestInvoice = (
+  invoice: string | Stripe.Invoice | null,
+): Invoice | null => {
+  const expanded = getExpanded(invoice);
+
+  return expanded ? mapStripeInvoice(expanded) : null;
+};
+
 export const getStripeCancelAt = (
   subscription: Stripe.Subscription,
 ): Date | null =>
@@ -72,6 +96,7 @@ export const mapStripeSubscription = (
   cancelAt: getStripeCancelAt(subscription),
   canceledAt: fromUnixSeconds(subscription.canceled_at),
   trialEnd: fromUnixSeconds(subscription.trial_end),
+  startDate: fromUnixSeconds(subscription.start_date),
   createdAt: new Date(subscription.created * 1000),
   metadata: subscription.metadata,
   provider: CashierProvider.Stripe,
@@ -92,5 +117,17 @@ export const mapStripeSubscription = (
     : {}),
   ...(relations.has('discount')
     ? { discount: mapStripeSubscriptionDiscount(subscription.discount) }
+    : {}),
+  ...(relations.has('paymentMethod')
+    ? {
+        paymentMethod: mapStripeSubscriptionPaymentMethod(
+          getStripeSubscriptionPaymentMethod(subscription),
+        ),
+      }
+    : {}),
+  ...(relations.has('latestInvoice')
+    ? {
+        latestInvoice: mapStripeLatestInvoice(subscription.latest_invoice),
+      }
     : {}),
 });

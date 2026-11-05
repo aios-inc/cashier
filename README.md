@@ -53,7 +53,7 @@ To switch providers, change `default`. Your billing code stays the same. Use `ca
 
 ## Documentation
 
-- [API reference](https://github.com/aios-inc/cashier/blob/main/docs/README.md#api-reference): customers, invoices, payments, products, prices and subscriptions
+- [API reference](https://github.com/aios-inc/cashier/blob/main/docs/README.md#api-reference): customers, invoices, payments, payment methods, products, prices, subscriptions and the Stripe account
 - [TypeScript](https://github.com/aios-inc/cashier/blob/main/docs/typescript.md), [NestJS](https://github.com/aios-inc/cashier/blob/main/docs/nestjs.md), [Express](https://github.com/aios-inc/cashier/blob/main/docs/express.md)
 - [Drivers and conventions](https://github.com/aios-inc/cashier/blob/main/docs/drivers.md)
 - [Errors](https://github.com/aios-inc/cashier/blob/main/docs/errors.md)

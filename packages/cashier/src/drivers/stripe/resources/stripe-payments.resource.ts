@@ -3,6 +3,7 @@ import { CashierProvider } from '../../../types/cashier.types';
 import {
   CreatePaymentParams,
   CursorPaginatePaymentsParams,
+  GetPaymentParams,
   ListPaymentsParams,
   Payment,
   PaymentWith,
@@ -10,6 +11,7 @@ import {
   ProviderPaymentRelation,
   Refund,
   RefundPaymentParams,
+  SendReceiptParams,
 } from '../../../types/payment.types';
 import { CursorPaginator } from '../../../types/pagination.types';
 import {
@@ -27,6 +29,7 @@ import {
   toStripeExpand,
   toStripeRequestOptions,
 } from '../mappers/stripe-mapper.utils';
+import { getStripeCustomerEmail, sendStripeReceipt } from '../stripe-receipt';
 import { stripeRequest } from '../stripe-request';
 
 type StripePaymentRelation = ProviderPaymentRelation<CashierProvider.Stripe>;
@@ -35,8 +38,35 @@ const STRIPE_PAYMENT_RELATIONS: ReadonlySet<string> = new Set(
   Object.keys(STRIPE_PAYMENT_RELATION_EXPAND),
 );
 
+const resolvePaymentRelations = <Relation extends StripePaymentRelation>(
+  requested?: readonly Relation[],
+): ReadonlySet<Relation> =>
+  resolveRelations(
+    CashierProvider.Stripe,
+    'payments',
+    STRIPE_PAYMENT_RELATIONS,
+    requested,
+  );
+
 export class StripePaymentsResource implements PaymentsResource<CashierProvider.Stripe> {
   constructor(private readonly client: Stripe) {}
+
+  get<Relation extends StripePaymentRelation = never>(
+    paymentId: string,
+    params: GetPaymentParams<Relation> = {},
+  ): Promise<PaymentWith<Relation>> {
+    return stripeRequest(async () => {
+      const relations = resolvePaymentRelations(params.with);
+
+      return mapStripePayment(
+        await this.client.paymentIntents.retrieve(
+          paymentId,
+          toStripeExpand(relations, STRIPE_PAYMENT_RELATION_EXPAND),
+        ),
+        relations,
+      ) as PaymentWith<Relation>;
+    });
+  }
 
   async list<Relation extends StripePaymentRelation = never>({
     customer,
@@ -114,18 +144,35 @@ export class StripePaymentsResource implements PaymentsResource<CashierProvider.
     );
   }
 
+  sendReceipt(
+    paymentId: string,
+    { email }: SendReceiptParams = {},
+  ): Promise<void> {
+    return stripeRequest(async () => {
+      const paymentIntent = await this.client.paymentIntents.retrieve(
+        paymentId,
+        { expand: ['customer'] },
+      );
+
+      await sendStripeReceipt(this.client, {
+        subject: `Payment ${paymentId}`,
+        paid: paymentIntent.status === 'succeeded',
+        charge: paymentIntent.latest_charge,
+        email:
+          email ??
+          paymentIntent.receipt_email ??
+          getStripeCustomerEmail(paymentIntent.customer),
+      });
+    });
+  }
+
   private fetch<Relation extends StripePaymentRelation>(
     params: Stripe.PaymentIntentListParams,
     perPage: number,
     requested?: readonly Relation[],
   ): Promise<CursorPaginator<PaymentWith<Relation>>> {
     return stripeRequest(async () => {
-      const relations = resolveRelations(
-        CashierProvider.Stripe,
-        'payments',
-        STRIPE_PAYMENT_RELATIONS,
-        requested,
-      );
+      const relations = resolvePaymentRelations(requested);
 
       return toStripeCursorPaginator(
         await this.client.paymentIntents.list({

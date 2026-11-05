@@ -5,28 +5,40 @@ import {
   CursorPaginateInvoicesParams,
   GetInvoiceParams,
   Invoice,
+  InvoicePreview,
+  InvoiceScope,
   InvoiceWith,
   InvoicesResource,
   ListInvoicesParams,
   PayInvoiceParams,
+  PreviewInvoiceParams,
   ProviderInvoiceRelation,
 } from '../../../types/invoice.types';
 import { CursorPaginator } from '../../../types/pagination.types';
+import { SendReceiptParams } from '../../../types/payment.types';
 import {
   DEFAULT_DAYS_UNTIL_DUE,
   DEFAULT_LIST_LIMIT,
   STRIPE_INVOICE_RELATION_EXPAND,
+  STRIPE_PRORATION_BEHAVIORS,
 } from '../../../constants/cashier.constants';
+import { ValidationError } from '../../../errors/validation.error';
 import { validateCreateInvoiceParams } from '../../../utils/create-params.utils';
 import { resolveRelations } from '../../../utils/relations.utils';
-import { mapStripeInvoice } from '../mappers/stripe-invoice.mapper';
+import {
+  mapStripeInvoice,
+  mapStripeInvoicePreview,
+} from '../mappers/stripe-invoice.mapper';
 import {
   toStripeCursorPaginator,
   toStripeExpand,
   toStripeRequestOptions,
   toUnixSeconds,
 } from '../mappers/stripe-mapper.utils';
+import { readAllStripeItems } from '../stripe-list';
+import { sendStripeReceipt } from '../stripe-receipt';
 import { stripeRequest } from '../stripe-request';
+import { getStripeSubscriptionItemId } from '../stripe-subscription-item';
 
 type StripeInvoiceRelation = ProviderInvoiceRelation<CashierProvider.Stripe>;
 
@@ -43,6 +55,28 @@ const resolveInvoiceRelations = <Relation extends StripeInvoiceRelation>(
     STRIPE_INVOICE_RELATIONS,
     requested,
   );
+
+const STRIPE_LINE_ITEMS_PAGE_SIZE = 100;
+
+const toStripeInvoiceScope = ({
+  customer,
+  subscription,
+}: InvoiceScope): Pick<
+  Stripe.InvoiceListParams,
+  'customer' | 'subscription'
+> => {
+  if (!customer && !subscription) {
+    throw new ValidationError(
+      'Listing invoices requires a customer or a subscription',
+      { provider: CashierProvider.Stripe },
+    );
+  }
+
+  return {
+    ...(customer ? { customer } : {}),
+    ...(subscription ? { subscription } : {}),
+  };
+};
 
 const toStripeDueTerms = ({
   collection,
@@ -105,34 +139,47 @@ export class StripeInvoicesResource implements InvoicesResource<CashierProvider.
   ): Promise<InvoiceWith<Relation>> {
     return stripeRequest(async () => {
       const relations = resolveInvoiceRelations(params.with);
+      const invoice = await this.client.invoices.retrieve(
+        invoiceId,
+        toStripeExpand(relations, STRIPE_INVOICE_RELATION_EXPAND),
+      );
 
       return mapStripeInvoice(
-        await this.client.invoices.retrieve(
-          invoiceId,
-          toStripeExpand(relations, STRIPE_INVOICE_RELATION_EXPAND),
-        ),
+        await this.withLineItems(invoice, relations),
         relations,
       ) as InvoiceWith<Relation>;
     });
   }
 
-  async list<Relation extends StripeInvoiceRelation = never>({
+  list<Relation extends StripeInvoiceRelation = never>({
     customer,
+    subscription,
     status,
     limit = DEFAULT_LIST_LIMIT,
     with: relations,
   }: ListInvoicesParams<Relation>): Promise<InvoiceWith<Relation>[]> {
-    return (
-      await this.fetch<Relation>(
-        { customer, limit, ...(status ? { status } : {}) },
-        limit,
-        relations,
-      )
-    ).data;
+    return stripeRequest(
+      async () =>
+        (
+          await this.fetch<Relation>(
+            {
+              ...toStripeInvoiceScope({
+                customer,
+                subscription,
+              } as InvoiceScope),
+              limit,
+              ...(status ? { status } : {}),
+            },
+            limit,
+            relations,
+          )
+        ).data,
+    );
   }
 
   cursorPaginate<Relation extends StripeInvoiceRelation = never>({
     customer,
+    subscription,
     status,
     perPage = DEFAULT_LIST_LIMIT,
     cursor,
@@ -140,15 +187,17 @@ export class StripeInvoicesResource implements InvoicesResource<CashierProvider.
   }: CursorPaginateInvoicesParams<Relation>): Promise<
     CursorPaginator<InvoiceWith<Relation>>
   > {
-    return this.fetch<Relation>(
-      {
-        customer,
-        limit: perPage,
-        ...(status ? { status } : {}),
-        ...(cursor ? { starting_after: cursor } : {}),
-      },
-      perPage,
-      relations,
+    return stripeRequest(() =>
+      this.fetch<Relation>(
+        {
+          ...toStripeInvoiceScope({ customer, subscription } as InvoiceScope),
+          limit: perPage,
+          ...(status ? { status } : {}),
+          ...(cursor ? { starting_after: cursor } : {}),
+        },
+        perPage,
+        relations,
+      ),
     );
   }
 
@@ -212,6 +261,86 @@ export class StripeInvoicesResource implements InvoicesResource<CashierProvider.
     );
   }
 
+  preview({
+    subscription,
+    price,
+    quantity,
+    proration,
+  }: PreviewInvoiceParams): Promise<InvoicePreview> {
+    return stripeRequest(async () => {
+      const isItemChange = price !== undefined || quantity !== undefined;
+      const params: Stripe.InvoiceRetrieveUpcomingParams = {
+        subscription,
+        ...(isItemChange
+          ? {
+              subscription_items: [
+                {
+                  id: await getStripeSubscriptionItemId(
+                    this.client,
+                    subscription,
+                  ),
+                  ...(price ? { price } : {}),
+                  ...(quantity !== undefined ? { quantity } : {}),
+                },
+              ],
+            }
+          : {}),
+        ...(proration
+          ? {
+              subscription_proration_behavior:
+                STRIPE_PRORATION_BEHAVIORS[proration],
+            }
+          : {}),
+      };
+      const upcoming = await this.client.invoices.retrieveUpcoming(params);
+      const lineItems = await readAllStripeItems(
+        upcoming.lines,
+        (startingAfter) =>
+          this.client.invoices.listUpcomingLines({
+            ...params,
+            limit: STRIPE_LINE_ITEMS_PAGE_SIZE,
+            starting_after: startingAfter,
+          }),
+      );
+
+      return mapStripeInvoicePreview(upcoming, subscription, lineItems);
+    });
+  }
+
+  sendReceipt(
+    invoiceId: string,
+    { email }: SendReceiptParams = {},
+  ): Promise<void> {
+    return stripeRequest(async () => {
+      const invoice = await this.client.invoices.retrieve(invoiceId);
+
+      await sendStripeReceipt(this.client, {
+        subject: `Invoice ${invoiceId}`,
+        paid: invoice.status === 'paid',
+        charge: invoice.charge,
+        email: email ?? invoice.customer_email,
+      });
+    });
+  }
+
+  private async withLineItems(
+    invoice: Stripe.Invoice,
+    relations: ReadonlySet<StripeInvoiceRelation>,
+  ): Promise<Stripe.Invoice> {
+    if (!relations.has('lineItems') || !invoice.lines?.has_more) {
+      return invoice;
+    }
+
+    const data = await readAllStripeItems(invoice.lines, (startingAfter) =>
+      this.client.invoices.listLineItems(invoice.id, {
+        limit: STRIPE_LINE_ITEMS_PAGE_SIZE,
+        starting_after: startingAfter,
+      }),
+    );
+
+    return { ...invoice, lines: { ...invoice.lines, data, has_more: false } };
+  }
+
   private fetch<Relation extends StripeInvoiceRelation>(
     params: Stripe.InvoiceListParams,
     perPage: number,
@@ -219,12 +348,16 @@ export class StripeInvoicesResource implements InvoicesResource<CashierProvider.
   ): Promise<CursorPaginator<InvoiceWith<Relation>>> {
     return stripeRequest(async () => {
       const relations = resolveInvoiceRelations(requested);
+      const response = await this.client.invoices.list({
+        ...params,
+        ...toStripeExpand(relations, STRIPE_INVOICE_RELATION_EXPAND, 'data.'),
+      });
+      const invoices = await Promise.all(
+        response.data.map((invoice) => this.withLineItems(invoice, relations)),
+      );
 
       return toStripeCursorPaginator(
-        await this.client.invoices.list({
-          ...params,
-          ...toStripeExpand(relations, STRIPE_INVOICE_RELATION_EXPAND, 'data.'),
-        }),
+        { ...response, data: invoices },
         perPage,
         (invoice) =>
           mapStripeInvoice(invoice, relations) as InvoiceWith<Relation>,

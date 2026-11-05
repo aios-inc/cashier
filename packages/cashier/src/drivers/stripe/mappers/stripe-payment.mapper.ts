@@ -4,7 +4,10 @@ import {
   Payment,
   PaymentDispute,
   PaymentDisputeStatus,
+  PaymentEvent,
+  PaymentEventType,
   PaymentRelation,
+  PaymentRelationFields,
   PaymentStatus,
   PaymentSubscription,
   PaymentWith,
@@ -15,6 +18,8 @@ import {
   getExpandableId,
   getExpanded,
 } from './stripe-mapper.utils';
+import { mapStripePaymentMethodDetails } from './stripe-payment-method.mapper';
+import { mapStripeRefund } from './stripe-refund.mapper';
 import { getStripeCancelAt } from './stripe-subscription.mapper';
 
 type StripeRefund = Stripe.Refund & {
@@ -78,6 +83,61 @@ const mapStripeDispute = (
   };
 };
 
+const COUNTED_REFUND_STATUSES: ReadonlySet<string> = new Set([
+  'succeeded',
+  'pending',
+]);
+
+const toPaymentEvent = (
+  type: PaymentEventType,
+  at: number,
+  amount: number | null,
+): PaymentEvent => ({ type, at: new Date(at * 1000), amount });
+
+const mapStripePaymentTimeline = (
+  paymentIntent: Stripe.PaymentIntent,
+  charge: StripeCharge | null,
+): PaymentEvent[] => {
+  const events = [
+    toPaymentEvent('created', paymentIntent.created, paymentIntent.amount),
+  ];
+
+  if (charge?.status === 'succeeded' || charge?.status === 'failed') {
+    events.push(toPaymentEvent(charge.status, charge.created, charge.amount));
+  }
+
+  for (const refund of charge?.refunds?.data ?? []) {
+    if (COUNTED_REFUND_STATUSES.has(refund.status ?? '')) {
+      events.push(toPaymentEvent('refunded', refund.created, refund.amount));
+    }
+  }
+
+  const dispute = getExpanded(charge?.dispute);
+
+  if (dispute) {
+    events.push(toPaymentEvent('disputed', dispute.created, dispute.amount));
+  }
+
+  if (paymentIntent.canceled_at) {
+    events.push(toPaymentEvent('canceled', paymentIntent.canceled_at, null));
+  }
+
+  return events.sort(
+    (first, second) => first.at.getTime() - second.at.getTime(),
+  );
+};
+
+const mapStripeFees = (
+  charge: StripeCharge | null,
+): PaymentRelationFields['fees'] => {
+  const balanceTransaction = getExpanded(charge?.balance_transaction);
+
+  return {
+    fee: balanceTransaction?.fee ?? null,
+    net: balanceTransaction?.net ?? null,
+  };
+};
+
 const isReversed = (charge: StripeCharge | null): boolean =>
   charge?.refunds?.data.some(
     (refund) => refund.destination_details?.card?.type === 'reversal',
@@ -120,7 +180,10 @@ export const mapStripePayment = (
     createdAt: new Date(paymentIntent.created * 1000),
     provider: CashierProvider.Stripe,
     ...(relations.has('refunds')
-      ? { amountRefunded: charge?.amount_refunded ?? 0 }
+      ? {
+          amountRefunded: charge?.amount_refunded ?? 0,
+          refunds: (charge?.refunds?.data ?? []).map(mapStripeRefund),
+        }
       : {}),
     ...(relations.has('dispute')
       ? { dispute: mapStripeDispute(charge?.dispute) }
@@ -131,6 +194,25 @@ export const mapStripePayment = (
     ...(relations.has('reversal') ? { reversed: isReversed(charge) } : {}),
     ...(relations.has('subscription')
       ? { subscription: mapStripePaymentSubscription(paymentIntent.invoice) }
+      : {}),
+    ...(relations.has('paymentMethod')
+      ? {
+          paymentMethod: charge?.payment_method_details
+            ? mapStripePaymentMethodDetails(charge.payment_method_details)
+            : null,
+        }
+      : {}),
+    ...(relations.has('fees') ? mapStripeFees(charge) : {}),
+    ...(relations.has('statementDescriptor')
+      ? {
+          statementDescriptor:
+            charge?.calculated_statement_descriptor ??
+            paymentIntent.statement_descriptor ??
+            null,
+        }
+      : {}),
+    ...(relations.has('timeline')
+      ? { timeline: mapStripePaymentTimeline(paymentIntent, charge) }
       : {}),
   };
 };
