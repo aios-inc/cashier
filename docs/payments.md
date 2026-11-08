@@ -217,10 +217,10 @@ await cashier
 | --------- | -------- | ------------------------------------------------------------------------------------------ |
 | `email`   | `string` | Where to send it. Defaults to the payment's `receipt_email`, then to the customer's email. |
 
-| Provider | Behavior                                                                                                                                                                                        |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Stripe   | Sets `receipt_email` on the payment's latest charge, which makes Stripe send the receipt, even when receipts are turned off in your email settings. Stripe does not send receipts in test mode. |
-| Recurly  | Not available. Recurly's API cannot send a receipt, so `sendReceipt` does not compile on the Recurly driver. See [Provider-only methods](typescript.md#provider-only-methods).                  |
+| Provider | Behavior                                                                                                                                                                                                                                                                                                                                                                                                         |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stripe   | Sets `receipt_email` on the payment's latest charge, which makes Stripe send the receipt, even when receipts are turned off in your email settings. Stripe only sends when `receipt_email` changes, so when the charge already has this address (compared case-insensitively) it is cleared first and then set again. That makes resending to the same address work. Stripe does not send receipts in test mode. |
+| Recurly  | Not available. Recurly's API cannot send a receipt, so `sendReceipt` does not compile on the Recurly driver. See [Provider-only methods](typescript.md#provider-only-methods).                                                                                                                                                                                                                                   |
 
 A payment that has not succeeded, or that has no email to send to, rejects with `ValidationError`. To send the receipt of an invoice, see [`invoices.sendReceipt`](invoices.md#invoicessendreceiptinvoiceid-params).
 
