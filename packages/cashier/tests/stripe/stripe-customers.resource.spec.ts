@@ -79,6 +79,62 @@ describe('StripeCustomersResource', () => {
     });
   });
 
+  describe('search', () => {
+    it('should search by the quoted email with the default limit', async () => {
+      client.customers.search.mockResolvedValue({
+        data: [STRIPE_FIXTURES.CUSTOMER],
+      });
+
+      const result = await customers.search({
+        email: STRIPE_FIXTURES.CUSTOMER_EMAIL,
+      });
+
+      expect(client.customers.search).toHaveBeenCalledWith({
+        query: `email:"${STRIPE_FIXTURES.CUSTOMER_EMAIL}"`,
+        limit: 100,
+      });
+      expect(result).toEqual([STRIPE_FIXTURES.EXPECTED_CUSTOMER]);
+    });
+
+    it('should escape backslashes and quotes in the email', async () => {
+      client.customers.search.mockResolvedValue({ data: [] });
+
+      await customers.search({ email: 'a\\b"c@example.com' });
+
+      expect(client.customers.search).toHaveBeenCalledWith({
+        query: 'email:"a\\\\b\\"c@example.com"',
+        limit: 100,
+      });
+    });
+
+    it.each([
+      [5, 5],
+      [0, 1],
+      [-3, 1],
+      [250, 100],
+      [7.9, 7],
+    ])('should clamp a limit of %s to %s', async (limit, expected) => {
+      client.customers.search.mockResolvedValue({ data: [] });
+
+      await customers.search({ email: STRIPE_FIXTURES.CUSTOMER_EMAIL, limit });
+
+      expect(client.customers.search).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: expected }),
+      );
+    });
+
+    it.each([
+      ['an empty email', ''],
+      ['a blank email', '  '],
+    ])('should reject %s without calling Stripe', async (_case, email) => {
+      await expect(customers.search({ email })).rejects.toMatchObject({
+        constructor: ValidationError,
+        provider: CashierProvider.Stripe,
+      });
+      expect(client.customers.search).not.toHaveBeenCalled();
+    });
+  });
+
   describe('create', () => {
     it('should create the customer with a joined name and metadata', async () => {
       client.customers.create.mockResolvedValue(STRIPE_FIXTURES.CUSTOMER);
@@ -240,6 +296,7 @@ describe('StripeCustomersResource', () => {
       amount: -2500,
       currency: 'usd',
       description: 'Goodwill',
+      ending_balance: -4000,
       created: 1767225600,
     };
 
@@ -261,9 +318,31 @@ describe('StripeCustomersResource', () => {
         amount: -2500,
         currency: 'USD',
         description: 'Goodwill',
+        endingBalance: -4000,
         createdAt: new Date(1767225600 * 1000),
         provider: CashierProvider.Stripe,
       });
+    });
+
+    it('should pass the metadata and the idempotency key to Stripe', async () => {
+      client.customers.createBalanceTransaction.mockResolvedValue(transaction);
+
+      await customers.creditBalance(STRIPE_FIXTURES.CUSTOMER_ID, {
+        amount: 2500,
+        currency: 'USD',
+        metadata: { source: 'support', actorId: 'user_1' },
+        idempotencyKey: 'credit-42',
+      });
+
+      expect(client.customers.createBalanceTransaction).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.CUSTOMER_ID,
+        {
+          amount: -2500,
+          currency: 'usd',
+          metadata: { source: 'support', actorId: 'user_1' },
+        },
+        { idempotencyKey: 'credit-42' },
+      );
     });
 
     it('should leave out a missing description', async () => {
@@ -307,6 +386,7 @@ describe('StripeCustomersResource', () => {
         amount: 1000,
         currency: 'eur',
         description: null,
+        ending_balance: 1000,
         created: 1767225600,
       });
 
@@ -325,7 +405,39 @@ describe('StripeCustomersResource', () => {
         amount: 1000,
         currency: 'EUR',
         description: null,
+        endingBalance: 1000,
       });
+    });
+
+    it('should pass the metadata and the idempotency key to Stripe', async () => {
+      client.customers.createBalanceTransaction.mockResolvedValue({
+        id: 'cbtxn_456',
+        customer: STRIPE_FIXTURES.CUSTOMER_ID,
+        amount: 1000,
+        currency: 'eur',
+        description: 'Late fee',
+        ending_balance: 1000,
+        created: 1767225600,
+      });
+
+      await customers.debitBalance(STRIPE_FIXTURES.CUSTOMER_ID, {
+        amount: 1000,
+        currency: 'EUR',
+        description: 'Late fee',
+        metadata: { direction: 'debit' },
+        idempotencyKey: 'debit-42',
+      });
+
+      expect(client.customers.createBalanceTransaction).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.CUSTOMER_ID,
+        {
+          amount: 1000,
+          currency: 'eur',
+          description: 'Late fee',
+          metadata: { direction: 'debit' },
+        },
+        { idempotencyKey: 'debit-42' },
+      );
     });
 
     it('should reject an invalid amount without calling Stripe', async () => {

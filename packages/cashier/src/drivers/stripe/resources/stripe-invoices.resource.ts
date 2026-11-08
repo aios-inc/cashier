@@ -312,7 +312,9 @@ export class StripeInvoicesResource implements InvoicesResource<CashierProvider.
     { email }: SendReceiptParams = {},
   ): Promise<void> {
     return stripeRequest(async () => {
-      const invoice = await this.client.invoices.retrieve(invoiceId);
+      const invoice = await this.client.invoices.retrieve(invoiceId, {
+        expand: ['charge'],
+      });
 
       await sendStripeReceipt(this.client, {
         subject: `Invoice ${invoiceId}`,

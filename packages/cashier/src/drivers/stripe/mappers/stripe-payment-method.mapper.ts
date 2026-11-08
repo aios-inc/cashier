@@ -61,8 +61,8 @@ export const mapStripePaymentMethodDetails = (
   return {
     type: isBankAccount
       ? 'bank_account'
-      : details.type === 'paypal'
-        ? 'paypal'
+      : details.type === 'paypal' || details.type === 'link'
+        ? details.type
         : 'other',
     brand: null,
     last4: isBankAccount ? getBankAccountLast4(details) : null,

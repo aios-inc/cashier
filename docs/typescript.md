@@ -70,8 +70,9 @@ Some methods exist on one provider only, because the other provider's API cannot
 | [`account.get`](account.md#accountget)                                    | Stripe |
 | [`payments.sendReceipt`](payments.md#paymentssendreceiptpaymentid-params) | Stripe |
 | [`invoices.sendReceipt`](invoices.md#invoicessendreceiptinvoiceid-params) | Stripe |
+| [`customers.search`](customers.md#customerssearchparams)                  | Stripe |
 
-They are typed per provider, in `CashierDriverCapabilities`, `CashierPaymentCapabilities` and `CashierInvoiceCapabilities`, like the relations in `with`. They are only on a driver typed for that provider, so calling them anywhere else does not compile:
+They are typed per provider, in `CashierDriverCapabilities`, `CashierCustomerCapabilities`, `CashierPaymentCapabilities` and `CashierInvoiceCapabilities`, like the relations in `with`. They are only on a driver typed for that provider, so calling them anywhere else does not compile:
 
 ```ts
 await cashier.use(CashierProvider.Stripe).payments.sendReceipt('pi_123');

@@ -114,6 +114,12 @@ const checkProviderMethods = async (
   await stripe.payments.sendReceipt('pi_123');
   await stripe.invoices.sendReceipt('in_123', { email: 'jane@example.com' });
 
+  const [found] = await stripe.customers.search({
+    email: 'jane@example.com',
+    limit: 10,
+  });
+  const foundEmail: string | null | undefined = found?.email;
+
   const payment = await stripe.payments.get('pi_123', {
     with: ['fees', 'statementDescriptor', 'paymentMethod', 'timeline'],
   });
@@ -136,6 +142,9 @@ const checkProviderMethods = async (
   // @ts-expect-error Recurly cannot send receipts
   void recurly.invoices.sendReceipt;
 
+  // @ts-expect-error Recurly cannot search customers
+  void recurly.customers.search;
+
   // @ts-expect-error Recurly has no fees
   await recurly.payments.get('rec_txn_1', { with: ['fees'] });
 
@@ -147,6 +156,9 @@ const checkProviderMethods = async (
 
   // @ts-expect-error receipts are not available on every provider
   void cashier.use(provider).payments.sendReceipt;
+
+  // @ts-expect-error customer search is not available on every provider
+  void cashier.use().customers.search;
 
   const [paymentMethod] = await cashier
     .use()
@@ -182,6 +194,7 @@ const checkProviderMethods = async (
     balance,
     last4,
     latestInvoiceTotal,
+    foundEmail,
   };
 };
 

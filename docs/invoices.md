@@ -287,10 +287,10 @@ await cashier.use(CashierProvider.Stripe).invoices.sendReceipt('in_123');
 | --------- | -------- | ------------------------------------------------------------- |
 | `email`   | `string` | Where to send it. Defaults to the invoice's `customer_email`. |
 
-| Provider | Behavior                                                                                                                                                                       |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Stripe   | Sets `receipt_email` on the invoice's charge, which makes Stripe send the receipt. Stripe does not send receipts in test mode.                                                 |
-| Recurly  | Not available. Recurly's API cannot send a receipt, so `sendReceipt` does not compile on the Recurly driver. See [Provider-only methods](typescript.md#provider-only-methods). |
+| Provider | Behavior                                                                                                                                                                                                                                                                                                                |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stripe   | Sets `receipt_email` on the invoice's charge, which makes Stripe send the receipt. When the charge already has this address it is cleared first, so resending to the same address works, as with [`payments.sendReceipt`](payments.md#paymentssendreceiptpaymentid-params). Stripe does not send receipts in test mode. |
+| Recurly  | Not available. Recurly's API cannot send a receipt, so `sendReceipt` does not compile on the Recurly driver. See [Provider-only methods](typescript.md#provider-only-methods).                                                                                                                                          |
 
 An invoice that is not paid, or that has no email to send to, rejects with `ValidationError`.
 

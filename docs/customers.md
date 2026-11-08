@@ -4,6 +4,7 @@
 
 - [`customers.get(customerId, params?)`](#customersgetcustomerid-params)
 - [`customers.list(params?)`](#customerslistparams)
+- [`customers.search(params)`](#customerssearchparams)
 - [`customers.create(params)`](#customerscreateparams)
 - [`customers.update(customerId, params)`](#customersupdatecustomerid-params)
 - [`customers.creditBalance(customerId, params)`](#customerscreditbalancecustomerid-params)
@@ -56,27 +57,32 @@ const transaction = await driver.customers.creditBalance('cus_123', {
   amount: 2500,
   currency: 'USD',
   description: 'Goodwill credit',
+  metadata: { reason: 'late-delivery' },
+  idempotencyKey: 'credit-order-42',
 });
 
 transaction.amount; // -2500
+transaction.endingBalance; // -4000 on Stripe, null on Recurly
 ```
 
-| Parameter     | Type     | Description                                                    |
-| ------------- | -------- | -------------------------------------------------------------- |
-| `amount`      | `number` | Required. A positive integer in minor units.                   |
-| `currency`    | `string` | Required. ISO 4217 code. Stripe needs the customer's currency. |
-| `description` | `string` | Why the balance changed.                                       |
+| Parameter        | Type                     | Description                                                                     |
+| ---------------- | ------------------------ | ------------------------------------------------------------------------------- |
+| `amount`         | `number`                 | Required. A positive integer in minor units.                                    |
+| `currency`       | `string`                 | Required. ISO 4217 code. Stripe needs the customer's currency.                  |
+| `description`    | `string`                 | Why the balance changed.                                                        |
+| `metadata`       | `Record<string, string>` | Extra key and value pairs saved on the transaction.                             |
+| `idempotencyKey` | `string`                 | Makes a retry with the same key safe, so a retried request cannot credit twice. |
 
 An `amount` that is not a positive integer, or a missing `currency`, rejects with `ValidationError` before any request.
 
-| Provider | Behavior                                                                                                                               |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Stripe   | Creates a customer balance transaction with a negative `amount`.                                                                       |
-| Recurly  | Creates a pending `credit` line item on the account, with the amount in major units. Recurly applies it to the account's next invoice. |
+| Provider | Behavior                                                                                                                                                                                                                                                |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stripe   | Creates a customer balance transaction with a negative `amount`. `metadata` is saved as the transaction's metadata. `idempotencyKey` is sent unchanged.                                                                                                 |
+| Recurly  | Creates a pending `credit` line item on the account, with the amount in major units. Recurly applies it to the account's next invoice. `metadata` is saved as custom fields on the line item. `idempotencyKey` is sent as the `Idempotency-Key` header. |
 
 ## `customers.debitBalance(customerId, params)`
 
-Adds an amount the customer owes to their next invoice, and returns the balance transaction. It takes the same parameters as [`creditBalance`](#customerscreditbalancecustomerid-params).
+Adds an amount the customer owes to their next invoice, and returns the balance transaction. It takes the same parameters as [`creditBalance`](#customerscreditbalancecustomerid-params), including `metadata` and `idempotencyKey`.
 
 ```ts
 await driver.customers.debitBalance('cus_123', {
@@ -91,17 +97,20 @@ await driver.customers.debitBalance('cus_123', {
 | Stripe   | Creates a customer balance transaction with a positive `amount`. |
 | Recurly  | Creates a pending `charge` line item on the account.             |
 
+`metadata` and `idempotencyKey` are passed on as in [`creditBalance`](#customerscreditbalancecustomerid-params).
+
 ### The `BalanceTransaction` object
 
-| Field         | Type              | Description                                                                |
-| ------------- | ----------------- | -------------------------------------------------------------------------- |
-| `id`          | `string`          | The Stripe balance transaction id, or the Recurly line item id.            |
-| `customerId`  | `string \| null`  | The customer or account id.                                                |
-| `amount`      | `number`          | In minor units. Negative for `creditBalance`, positive for `debitBalance`. |
-| `currency`    | `string`          | Uppercase ISO 4217 code.                                                   |
-| `description` | `string \| null`  | The description, when one was given.                                       |
-| `createdAt`   | `Date`            | When it was created.                                                       |
-| `provider`    | `CashierProvider` | The provider it came from.                                                 |
+| Field           | Type              | Description                                                                                                                                                                                                                            |
+| --------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`            | `string`          | The Stripe balance transaction id, or the Recurly line item id.                                                                                                                                                                        |
+| `customerId`    | `string \| null`  | The customer or account id.                                                                                                                                                                                                            |
+| `amount`        | `number`          | In minor units. Negative for `creditBalance`, positive for `debitBalance`.                                                                                                                                                             |
+| `currency`      | `string`          | Uppercase ISO 4217 code.                                                                                                                                                                                                               |
+| `description`   | `string \| null`  | The description, when one was given.                                                                                                                                                                                                   |
+| `endingBalance` | `number \| null`  | The customer's balance in minor units after this transaction, as Stripe's `ending_balance`. Negative is credit, positive is due. Always `null` on Recurly, which adds the line item to the next invoice instead of updating a balance. |
+| `createdAt`     | `Date`            | When it was created.                                                                                                                                                                                                                   |
+| `provider`      | `CashierProvider` | The provider it came from.                                                                                                                                                                                                             |
 
 ## `customers.list(params?)`
 
@@ -120,6 +129,32 @@ const customers = await driver.customers.list({ email: 'jane@example.com' });
 | -------- | --------------------------------------------------------------------- |
 | Stripe   | Returns one page of up to `limit` customers. The maximum is 100.      |
 | Recurly  | Reads pages of accounts until `limit` is reached. The maximum is 200. |
+
+`email` is an exact match. Stripe documents its `email` filter as case-sensitive, so `jane@example.com` does not find a customer saved as `Jane@Example.com`. To find customers by email whatever its case, use [`customers.search`](#customerssearchparams) on Stripe.
+
+## `customers.search(params)`
+
+Finds customers by email, ignoring case. Only the Stripe driver has it.
+
+```ts
+const customers = await cashier
+  .use(CashierProvider.Stripe)
+  .customers.search({ email: 'jane@example.com' });
+```
+
+| Parameter | Type     | Description                                                                     |
+| --------- | -------- | ------------------------------------------------------------------------------- |
+| `email`   | `string` | Required. The email to look for. It matches regardless of case.                 |
+| `limit`   | `number` | Maximum number of customers. Defaults to `100` and is clamped to 1 through 100. |
+
+A missing or blank `email` rejects with `ValidationError` before any request.
+
+| Provider | Behavior                                                                                                                                                                                                                                              |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stripe   | Uses the [Search API](https://docs.stripe.com/search) with the query `email:"<email>"`, with `\` and `"` in the email escaped. Stripe's `:` operator is an exact match that ignores case. Returns one page of results.                                |
+| Recurly  | Not available. Recurly can only filter accounts by an exact email, which [`customers.list`](#customerslistparams) already does, so `search` does not compile on the Recurly driver. See [Provider-only methods](typescript.md#provider-only-methods). |
+
+Stripe Search is eventually consistent. A customer created or updated in the last minute may not appear yet, and during a Stripe outage it can take longer. Do not use it right after creating a customer; use [`customers.get`](#customersgetcustomerid-params) or [`customers.list`](#customerslistparams) for that. Stripe Search is also not available to businesses in India.
 
 ## `customers.create(params)`
 

@@ -25,7 +25,7 @@ export const sendStripeReceipt = async (
   }: {
     subject: string;
     paid: boolean;
-    charge: string | { id: string } | null | undefined;
+    charge: string | Stripe.Charge | null | undefined;
     email: string | null | undefined;
   },
 ): Promise<void> => {
@@ -33,6 +33,17 @@ export const sendStripeReceipt = async (
 
   if (!paid || !chargeId) fail(`${subject} has no successful charge`);
   if (!email) fail(`${subject} has no email to send the receipt to`);
+
+  const current =
+    getExpanded(charge) ?? (await client.charges.retrieve(chargeId as string));
+
+  // Stripe only sends a receipt when receipt_email changes, so clear it first
+  // when it already holds this address.
+  if (
+    current.receipt_email?.toLowerCase() === (email as string).toLowerCase()
+  ) {
+    await client.charges.update(chargeId as string, { receipt_email: '' });
+  }
 
   await client.charges.update(chargeId as string, {
     receipt_email: email as string,

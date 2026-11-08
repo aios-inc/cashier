@@ -723,6 +723,41 @@ describe('StripePaymentsResource', () => {
         });
       });
 
+      it('should map a Link payment as link, and a card paid through the Link wallet as a card', async () => {
+        const link = await getWith(
+          chargeWith({ payment_method_details: { type: 'link', link: {} } }),
+          'paymentMethod',
+        );
+        const linkCard = await getWith(
+          chargeWith({
+            payment_method_details: {
+              type: 'card',
+              card: {
+                brand: 'visa',
+                last4: '4242',
+                exp_month: 12,
+                exp_year: 2028,
+                wallet: { type: 'link' },
+              },
+            },
+          }),
+          'paymentMethod',
+        );
+
+        expect(link.paymentMethod).toEqual({
+          type: 'link',
+          brand: null,
+          last4: null,
+          expMonth: null,
+          expYear: null,
+          wallet: 'link',
+        });
+        expect(linkCard.paymentMethod).toMatchObject({
+          type: 'card',
+          wallet: 'link',
+        });
+      });
+
       it('should be null when there is no charge', async () => {
         const payment = await getWith({ latest_charge: null }, 'paymentMethod');
 
@@ -898,16 +933,26 @@ describe('StripePaymentsResource', () => {
   });
 
   describe('sendReceipt', () => {
+    const charge = (overrides: Record<string, unknown> = {}) => ({
+      id: 'ch_123',
+      receipt_email: null,
+      ...overrides,
+    });
+
     const mockPaymentIntent = (overrides: Record<string, unknown> = {}) =>
       client.paymentIntents.retrieve.mockResolvedValue({
         ...STRIPE_FIXTURES.SUCCEEDED_PAYMENT_INTENT,
         receipt_email: null,
         customer: STRIPE_FIXTURES.CUSTOMER,
+        latest_charge: charge(),
         ...overrides,
       });
 
     it('should send the receipt to the given email', async () => {
-      mockPaymentIntent({ receipt_email: 'old@example.com' });
+      mockPaymentIntent({
+        receipt_email: 'old@example.com',
+        latest_charge: charge({ receipt_email: 'old@example.com' }),
+      });
 
       await payments.sendReceipt(STRIPE_FIXTURES.PAYMENT_ID, {
         email: 'new@example.com',
@@ -915,17 +960,64 @@ describe('StripePaymentsResource', () => {
 
       expect(client.paymentIntents.retrieve).toHaveBeenCalledWith(
         STRIPE_FIXTURES.PAYMENT_ID,
-        { expand: ['customer'] },
+        { expand: ['customer', 'latest_charge'] },
       );
+      expect(client.charges.update).toHaveBeenCalledTimes(1);
       expect(client.charges.update).toHaveBeenCalledWith('ch_123', {
         receipt_email: 'new@example.com',
       });
     });
 
+    it('should clear the receipt email first when the charge already has it, so Stripe sends again', async () => {
+      mockPaymentIntent({
+        latest_charge: charge({
+          receipt_email: STRIPE_FIXTURES.CUSTOMER_EMAIL,
+        }),
+      });
+
+      await payments.sendReceipt(STRIPE_FIXTURES.PAYMENT_ID);
+
+      expect(client.charges.update.mock.calls).toEqual([
+        ['ch_123', { receipt_email: '' }],
+        ['ch_123', { receipt_email: STRIPE_FIXTURES.CUSTOMER_EMAIL }],
+      ]);
+      expect(client.charges.retrieve).not.toHaveBeenCalled();
+    });
+
+    it('should treat a receipt email in another case as the same address', async () => {
+      mockPaymentIntent({
+        latest_charge: charge({ receipt_email: 'Jane@Example.com' }),
+      });
+
+      await payments.sendReceipt(STRIPE_FIXTURES.PAYMENT_ID, {
+        email: 'jane@example.com',
+      });
+
+      expect(client.charges.update.mock.calls).toEqual([
+        ['ch_123', { receipt_email: '' }],
+        ['ch_123', { receipt_email: 'jane@example.com' }],
+      ]);
+    });
+
+    it('should retrieve the charge when it was not expanded', async () => {
+      mockPaymentIntent({ latest_charge: 'ch_456' });
+      client.charges.retrieve.mockResolvedValue(
+        charge({ id: 'ch_456', receipt_email: STRIPE_FIXTURES.CUSTOMER_EMAIL }),
+      );
+
+      await payments.sendReceipt(STRIPE_FIXTURES.PAYMENT_ID);
+
+      expect(client.charges.retrieve).toHaveBeenCalledWith('ch_456');
+      expect(client.charges.update.mock.calls).toEqual([
+        ['ch_456', { receipt_email: '' }],
+        ['ch_456', { receipt_email: STRIPE_FIXTURES.CUSTOMER_EMAIL }],
+      ]);
+    });
+
     it('should fall back to the payment receipt email', async () => {
       mockPaymentIntent({
         receipt_email: 'receipt@example.com',
-        latest_charge: 'ch_456',
+        latest_charge: charge({ id: 'ch_456' }),
       });
 
       await payments.sendReceipt(STRIPE_FIXTURES.PAYMENT_ID);
@@ -940,6 +1032,7 @@ describe('StripePaymentsResource', () => {
 
       await payments.sendReceipt(STRIPE_FIXTURES.PAYMENT_ID);
 
+      expect(client.charges.update).toHaveBeenCalledTimes(1);
       expect(client.charges.update).toHaveBeenCalledWith('ch_123', {
         receipt_email: STRIPE_FIXTURES.CUSTOMER_EMAIL,
       });
@@ -962,6 +1055,7 @@ describe('StripePaymentsResource', () => {
         constructor: ValidationError,
         provider: CashierProvider.Stripe,
       });
+      expect(client.charges.retrieve).not.toHaveBeenCalled();
       expect(client.charges.update).not.toHaveBeenCalled();
     });
   });

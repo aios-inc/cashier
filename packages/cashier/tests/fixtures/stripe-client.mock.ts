@@ -4,6 +4,7 @@ export const createStripeClientMock = () => ({
   customers: {
     retrieve: jest.fn(),
     list: jest.fn(),
+    search: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
     listPaymentMethods: jest.fn(),
@@ -13,6 +14,7 @@ export const createStripeClientMock = () => ({
     retrieve: jest.fn(),
   },
   charges: {
+    retrieve: jest.fn(),
     update: jest.fn(),
   },
   invoices: {
