@@ -10,9 +10,13 @@ import {
   CustomersResource,
   GetCustomerParams,
   ListCustomersParams,
+  SearchCustomersParams,
   UpdateCustomerParams,
 } from '../../../types/customer.types';
-import { DEFAULT_LIST_LIMIT } from '../../../constants/cashier.constants';
+import {
+  DEFAULT_LIST_LIMIT,
+  STRIPE_MAX_SEARCH_LIMIT,
+} from '../../../constants/cashier.constants';
 import { ValidationError } from '../../../errors/validation.error';
 import { validateAdjustBalanceParams } from '../../../utils/create-params.utils';
 import { resolveRelations } from '../../../utils/relations.utils';
@@ -28,7 +32,10 @@ import { stripeRequest } from '../stripe-request';
 
 const STRIPE_CUSTOMER_RELATIONS: ReadonlySet<string> = new Set(['balances']);
 
-export class StripeCustomersResource implements CustomersResource {
+const toStripeSearchString = (value: string): string =>
+  `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+
+export class StripeCustomersResource implements CustomersResource<CashierProvider.Stripe> {
   constructor(private readonly client: Stripe) {}
 
   get<Relation extends CustomerRelation = never>(
@@ -61,6 +68,31 @@ export class StripeCustomersResource implements CustomersResource {
       const response = await this.client.customers.list({
         limit,
         ...(email ? { email } : {}),
+      });
+
+      return response.data.map(mapStripeCustomer);
+    });
+  }
+
+  search({
+    email,
+    limit = DEFAULT_LIST_LIMIT,
+  }: SearchCustomersParams): Promise<Customer[]> {
+    if (!email?.trim()) {
+      return Promise.reject(
+        new ValidationError('An email is required to search customers', {
+          provider: CashierProvider.Stripe,
+        }),
+      );
+    }
+
+    return stripeRequest(async () => {
+      const response = await this.client.customers.search({
+        query: `email:${toStripeSearchString(email)}`,
+        limit: Math.min(
+          Math.max(Math.trunc(limit), 1),
+          STRIPE_MAX_SEARCH_LIMIT,
+        ),
       });
 
       return response.data.map(mapStripeCustomer);

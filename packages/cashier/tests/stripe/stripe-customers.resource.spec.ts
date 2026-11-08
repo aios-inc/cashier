@@ -79,6 +79,62 @@ describe('StripeCustomersResource', () => {
     });
   });
 
+  describe('search', () => {
+    it('should search by the quoted email with the default limit', async () => {
+      client.customers.search.mockResolvedValue({
+        data: [STRIPE_FIXTURES.CUSTOMER],
+      });
+
+      const result = await customers.search({
+        email: STRIPE_FIXTURES.CUSTOMER_EMAIL,
+      });
+
+      expect(client.customers.search).toHaveBeenCalledWith({
+        query: `email:"${STRIPE_FIXTURES.CUSTOMER_EMAIL}"`,
+        limit: 100,
+      });
+      expect(result).toEqual([STRIPE_FIXTURES.EXPECTED_CUSTOMER]);
+    });
+
+    it('should escape backslashes and quotes in the email', async () => {
+      client.customers.search.mockResolvedValue({ data: [] });
+
+      await customers.search({ email: 'a\\b"c@example.com' });
+
+      expect(client.customers.search).toHaveBeenCalledWith({
+        query: 'email:"a\\\\b\\"c@example.com"',
+        limit: 100,
+      });
+    });
+
+    it.each([
+      [5, 5],
+      [0, 1],
+      [-3, 1],
+      [250, 100],
+      [7.9, 7],
+    ])('should clamp a limit of %s to %s', async (limit, expected) => {
+      client.customers.search.mockResolvedValue({ data: [] });
+
+      await customers.search({ email: STRIPE_FIXTURES.CUSTOMER_EMAIL, limit });
+
+      expect(client.customers.search).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: expected }),
+      );
+    });
+
+    it.each([
+      ['an empty email', ''],
+      ['a blank email', '  '],
+    ])('should reject %s without calling Stripe', async (_case, email) => {
+      await expect(customers.search({ email })).rejects.toMatchObject({
+        constructor: ValidationError,
+        provider: CashierProvider.Stripe,
+      });
+      expect(client.customers.search).not.toHaveBeenCalled();
+    });
+  });
+
   describe('create', () => {
     it('should create the customer with a joined name and metadata', async () => {
       client.customers.create.mockResolvedValue(STRIPE_FIXTURES.CUSTOMER);

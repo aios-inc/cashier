@@ -48,7 +48,7 @@ export interface CashierDriverResources<
   Provider extends CashierProvider = CashierProvider,
 > {
   readonly provider: Provider;
-  readonly customers: CustomersResource;
+  readonly customers: CustomersResource<Provider>;
   readonly invoices: InvoicesResource<Provider>;
   readonly payments: PaymentsResource<Provider>;
   readonly paymentMethods: PaymentMethodsResource;

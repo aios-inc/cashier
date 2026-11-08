@@ -19,6 +19,8 @@ export const DEFAULT_LIST_LIMIT = 100;
 
 export const RECURLY_MAX_LIST_LIMIT = 200;
 
+export const STRIPE_MAX_SEARCH_LIMIT = 100;
+
 export const DRIVER_CACHE_SIZE = 100;
 
 export const STRIPE_MAX_CANCELLATION_COMMENT_LENGTH = 5000;

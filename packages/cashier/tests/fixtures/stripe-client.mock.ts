@@ -4,6 +4,7 @@ export const createStripeClientMock = () => ({
   customers: {
     retrieve: jest.fn(),
     list: jest.fn(),
+    search: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
     listPaymentMethods: jest.fn(),

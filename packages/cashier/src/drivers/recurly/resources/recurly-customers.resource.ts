@@ -40,7 +40,7 @@ interface RecurlyLineItemClient {
   ): Promise<recurly.LineItem>;
 }
 
-export class RecurlyCustomersResource implements CustomersResource {
+export class RecurlyCustomersResource implements CustomersResource<CashierProvider.Recurly> {
   constructor(private readonly client: recurly.Client) {}
 
   get<Relation extends CustomerRelation = never>(
