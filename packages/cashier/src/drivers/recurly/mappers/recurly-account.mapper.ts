@@ -51,6 +51,7 @@ export const mapRecurlyBalanceTransaction = (
     amount: toMinorUnits(lineItem.amount ?? 0, currency),
     currency,
     description: lineItem.description ?? null,
+    endingBalance: null,
     createdAt: lineItem.createdAt ?? new Date(0),
     provider: CashierProvider.Recurly,
   };

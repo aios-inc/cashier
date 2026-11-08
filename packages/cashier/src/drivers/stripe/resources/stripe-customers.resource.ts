@@ -22,6 +22,7 @@ import {
   mapStripeCustomerBalances,
   toStripeCustomerName,
 } from '../mappers/stripe-customer.mapper';
+import { toStripeRequestOptions } from '../mappers/stripe-mapper.utils';
 import { retrieveStripeCustomer } from '../stripe-customer';
 import { stripeRequest } from '../stripe-request';
 
@@ -147,11 +148,16 @@ export class StripeCustomersResource implements CustomersResource {
       validateAdjustBalanceParams(params, CashierProvider.Stripe);
 
       return mapStripeBalanceTransaction(
-        await this.client.customers.createBalanceTransaction(customerId, {
-          amount: sign * params.amount,
-          currency: params.currency.toLowerCase(),
-          ...(params.description ? { description: params.description } : {}),
-        }),
+        await this.client.customers.createBalanceTransaction(
+          customerId,
+          {
+            amount: sign * params.amount,
+            currency: params.currency.toLowerCase(),
+            ...(params.description ? { description: params.description } : {}),
+            ...(params.metadata ? { metadata: params.metadata } : {}),
+          },
+          ...toStripeRequestOptions(params.idempotencyKey),
+        ),
       );
     });
   }

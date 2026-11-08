@@ -32,6 +32,14 @@ import { recurlyRequest } from '../recurly-request';
 
 const RECURLY_CUSTOMER_RELATIONS: ReadonlySet<string> = new Set(['balances']);
 
+interface RecurlyLineItemClient {
+  createLineItem(
+    accountId: string,
+    body: recurly.LineItemCreate,
+    options?: { headers: Record<string, string> },
+  ): Promise<recurly.LineItem>;
+}
+
 export class RecurlyCustomersResource implements CustomersResource {
   constructor(private readonly client: recurly.Client) {}
 
@@ -189,14 +197,23 @@ export class RecurlyCustomersResource implements CustomersResource {
       validateAdjustBalanceParams(params, CashierProvider.Recurly);
 
       const currency = params.currency.toUpperCase();
+      const lineItems = this.client as unknown as RecurlyLineItemClient;
+      const body: recurly.LineItemCreate = {
+        type,
+        currency,
+        unitAmount: toMajorUnits(params.amount, currency),
+        ...(params.description ? { description: params.description } : {}),
+        ...(params.metadata
+          ? { customFields: toRecurlyCustomFields(params.metadata) }
+          : {}),
+      };
 
       return mapRecurlyBalanceTransaction(
-        await this.client.createLineItem(customerId, {
-          type,
-          currency,
-          unitAmount: toMajorUnits(params.amount, currency),
-          ...(params.description ? { description: params.description } : {}),
-        }),
+        params.idempotencyKey
+          ? await lineItems.createLineItem(customerId, body, {
+              headers: { 'Idempotency-Key': params.idempotencyKey },
+            })
+          : await lineItems.createLineItem(customerId, body),
       );
     });
   }

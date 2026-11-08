@@ -38,6 +38,7 @@ export const mapStripeBalanceTransaction = (
   amount: transaction.amount,
   currency: transaction.currency.toUpperCase(),
   description: transaction.description,
+  endingBalance: transaction.ending_balance ?? null,
   createdAt: new Date(transaction.created * 1000),
   provider: CashierProvider.Stripe,
 });

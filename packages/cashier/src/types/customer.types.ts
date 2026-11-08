@@ -34,6 +34,7 @@ export interface BalanceTransaction {
   amount: number;
   currency: string;
   description: string | null;
+  endingBalance: number | null;
   createdAt: Date;
   provider: CashierProvider;
 }
@@ -42,6 +43,8 @@ export interface AdjustBalanceParams {
   amount: number;
   currency: string;
   description?: string;
+  metadata?: Record<string, string>;
+  idempotencyKey?: string;
 }
 
 export interface ListCustomersParams {

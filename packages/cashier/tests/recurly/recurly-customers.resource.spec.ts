@@ -363,9 +363,36 @@ describe('RecurlyCustomersResource', () => {
         amount: -2500,
         currency: 'USD',
         description: 'Goodwill',
+        endingBalance: null,
         createdAt: new Date('2026-01-10T00:00:00Z'),
         provider: CashierProvider.Recurly,
       });
+    });
+
+    it('should save the metadata as custom fields and pass the idempotency key as a request header', async () => {
+      client.createLineItem.mockResolvedValue({
+        id: 'li_1',
+        currency: 'USD',
+        amount: -25,
+      });
+
+      await customers.creditBalance(RECURLY_FIXTURES.ACCOUNT_ID, {
+        amount: 2500,
+        currency: 'USD',
+        metadata: { source: 'support' },
+        idempotencyKey: 'credit-42',
+      });
+
+      expect(client.createLineItem).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.ACCOUNT_ID,
+        {
+          type: 'credit',
+          currency: 'USD',
+          unitAmount: 25,
+          customFields: [{ name: 'source', value: 'support' }],
+        },
+        { headers: { 'Idempotency-Key': 'credit-42' } },
+      );
     });
   });
 
@@ -395,6 +422,7 @@ describe('RecurlyCustomersResource', () => {
         amount: 1000,
         currency: 'JPY',
         description: null,
+        endingBalance: null,
         createdAt: new Date(0),
         provider: CashierProvider.Recurly,
       });
