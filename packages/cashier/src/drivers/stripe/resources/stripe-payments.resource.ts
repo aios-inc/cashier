@@ -151,7 +151,7 @@ export class StripePaymentsResource implements PaymentsResource<CashierProvider.
     return stripeRequest(async () => {
       const paymentIntent = await this.client.paymentIntents.retrieve(
         paymentId,
-        { expand: ['customer'] },
+        { expand: ['customer', 'latest_charge'] },
       );
 
       await sendStripeReceipt(this.client, {

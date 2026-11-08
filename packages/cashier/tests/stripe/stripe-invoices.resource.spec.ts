@@ -941,7 +941,7 @@ describe('StripeInvoicesResource', () => {
     const mockInvoice = (overrides: Record<string, unknown> = {}) =>
       client.invoices.retrieve.mockResolvedValue({
         ...STRIPE_FIXTURES.SUBSCRIPTION_INVOICE,
-        charge: 'ch_123',
+        charge: { id: 'ch_123', receipt_email: null },
         customer_email: 'jane@example.com',
         ...overrides,
       });
@@ -955,20 +955,35 @@ describe('StripeInvoicesResource', () => {
 
       expect(client.invoices.retrieve).toHaveBeenCalledWith(
         STRIPE_FIXTURES.INVOICE_ID,
+        { expand: ['charge'] },
       );
+      expect(client.charges.update).toHaveBeenCalledTimes(1);
       expect(client.charges.update).toHaveBeenCalledWith('ch_123', {
         receipt_email: 'billing@example.com',
       });
     });
 
     it('should fall back to the invoice customer email', async () => {
-      mockInvoice({ charge: { id: 'ch_456' } });
+      mockInvoice({ charge: { id: 'ch_456', receipt_email: null } });
 
       await invoices.sendReceipt(STRIPE_FIXTURES.INVOICE_ID);
 
       expect(client.charges.update).toHaveBeenCalledWith('ch_456', {
         receipt_email: 'jane@example.com',
       });
+    });
+
+    it('should clear the receipt email first when the charge already has it, so Stripe sends again', async () => {
+      mockInvoice({
+        charge: { id: 'ch_123', receipt_email: 'jane@example.com' },
+      });
+
+      await invoices.sendReceipt(STRIPE_FIXTURES.INVOICE_ID);
+
+      expect(client.charges.update.mock.calls).toEqual([
+        ['ch_123', { receipt_email: '' }],
+        ['ch_123', { receipt_email: 'jane@example.com' }],
+      ]);
     });
 
     it.each([
