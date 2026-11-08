@@ -1,6 +1,7 @@
 import { CashierProvider } from './cashier.types';
 
-export type PaymentMethodType = 'card' | 'bank_account' | 'paypal' | 'other';
+export type PaymentMethodType =
+  'card' | 'bank_account' | 'paypal' | 'link' | 'other';
 
 export type PaymentMethodWallet = 'apple_pay' | 'google_pay' | 'link' | 'other';
 

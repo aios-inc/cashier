@@ -723,6 +723,41 @@ describe('StripePaymentsResource', () => {
         });
       });
 
+      it('should map a Link payment as link, and a card paid through the Link wallet as a card', async () => {
+        const link = await getWith(
+          chargeWith({ payment_method_details: { type: 'link', link: {} } }),
+          'paymentMethod',
+        );
+        const linkCard = await getWith(
+          chargeWith({
+            payment_method_details: {
+              type: 'card',
+              card: {
+                brand: 'visa',
+                last4: '4242',
+                exp_month: 12,
+                exp_year: 2028,
+                wallet: { type: 'link' },
+              },
+            },
+          }),
+          'paymentMethod',
+        );
+
+        expect(link.paymentMethod).toEqual({
+          type: 'link',
+          brand: null,
+          last4: null,
+          expMonth: null,
+          expYear: null,
+          wallet: 'link',
+        });
+        expect(linkCard.paymentMethod).toMatchObject({
+          type: 'card',
+          wallet: 'link',
+        });
+      });
+
       it('should be null when there is no charge', async () => {
         const payment = await getWith({ latest_charge: null }, 'paymentMethod');
 

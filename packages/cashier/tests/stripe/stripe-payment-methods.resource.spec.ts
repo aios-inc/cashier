@@ -114,7 +114,7 @@ describe('StripePaymentMethodsResource', () => {
       );
     });
 
-    it('should map cards, wallets, bank accounts and other types, and mark the default', async () => {
+    it('should map cards, wallets, bank accounts, Link and other types, and mark the default', async () => {
       mockCustomer('pm_apple');
       client.customers.listPaymentMethods.mockResolvedValue({
         data: [
@@ -148,7 +148,7 @@ describe('StripePaymentMethodsResource', () => {
         expectedOther('pm_sepa', 'bank_account', '3000'),
         expectedOther('pm_us_bank', 'bank_account', '6789'),
         expectedOther('pm_paypal', 'paypal', null),
-        expectedOther('pm_link', 'other', null, 'link'),
+        expectedOther('pm_link', 'link', null, 'link'),
         expectedOther('pm_klarna', 'other', null),
       ]);
     });

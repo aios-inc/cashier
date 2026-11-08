@@ -812,6 +812,23 @@ describe('StripeSubscriptionsResource', () => {
       });
     });
 
+    it('should map a Link payment method as link', async () => {
+      const subscription = await getWith(
+        { default_payment_method: { id: 'pm_link', type: 'link', link: {} } },
+        ['paymentMethod'],
+      );
+
+      expect(subscription.paymentMethod).toEqual({
+        id: 'pm_link',
+        type: 'link',
+        brand: null,
+        last4: null,
+        expMonth: null,
+        expYear: null,
+        wallet: 'link',
+      });
+    });
+
     it('should fall back to the customer default payment method', async () => {
       const subscription = await getWith(
         {
