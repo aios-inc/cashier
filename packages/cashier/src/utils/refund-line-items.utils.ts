@@ -5,6 +5,7 @@ import {
   RefundInvoiceLineItemsParams,
 } from '../types/invoice.types';
 import { ValidationError } from '../errors/validation.error';
+import { formatMoney } from './money.utils';
 
 const fail = (message: string, provider: CashierProvider): never => {
   throw new ValidationError(message, { provider });
@@ -37,13 +38,23 @@ export const validateRefundLineItemsParams = (
   }
 };
 
-export const resolveRefundLineItems = (
-  invoiceId: string,
-  invoiceLineItems: InvoiceLineItem[],
-  { lineItems }: RefundInvoiceLineItemsParams,
-  provider: CashierProvider,
-  { checkRemaining = true }: { checkRemaining?: boolean } = {},
-): InvoiceLineItemRefund[] =>
+interface ResolveRefundLineItemsInput {
+  invoiceId: string;
+  currency: string;
+  invoiceLineItems: InvoiceLineItem[];
+  params: RefundInvoiceLineItemsParams;
+  provider: CashierProvider;
+  checkRemaining?: boolean;
+}
+
+export const resolveRefundLineItems = ({
+  invoiceId,
+  currency,
+  invoiceLineItems,
+  params: { lineItems },
+  provider,
+  checkRemaining = true,
+}: ResolveRefundLineItemsInput): InvoiceLineItemRefund[] =>
   lineItems.map(({ lineItemId, amount }) => {
     const lineItem = invoiceLineItems.find(({ id }) => id === lineItemId);
 
@@ -63,7 +74,7 @@ export const resolveRefundLineItems = (
 
     if (refundAmount <= 0 || refundAmount > refundable) {
       return fail(
-        `Line item ${lineItemId} has ${refundable} left to refund`,
+        `${lineItem.description ?? `Line item ${lineItemId}`} has ${formatMoney(refundable, currency)} left to refund`,
         provider,
       );
     }
@@ -71,15 +82,22 @@ export const resolveRefundLineItems = (
     return { lineItemId, amount: refundAmount };
   });
 
-export const assertPaymentCoversRefund = (
-  invoiceId: string,
-  refundAmount: number,
-  paymentRemaining: number,
-  provider: CashierProvider,
-): void => {
+export const assertPaymentCoversRefund = ({
+  invoiceId,
+  currency,
+  refundAmount,
+  paymentRemaining,
+  provider,
+}: {
+  invoiceId: string;
+  currency: string;
+  refundAmount: number;
+  paymentRemaining: number;
+  provider: CashierProvider;
+}): void => {
   if (refundAmount > paymentRemaining) {
     fail(
-      `Invoice ${invoiceId} has ${Math.max(paymentRemaining, 0)} left to refund on its payment`,
+      `Invoice ${invoiceId} has ${formatMoney(Math.max(paymentRemaining, 0), currency)} left to refund on its payment`,
       provider,
     );
   }

@@ -1188,7 +1188,7 @@ describe('StripeInvoicesResource', () => {
         }),
       ).rejects.toThrow(
         new ValidationError(
-          `Invoice ${STRIPE_FIXTURES.INVOICE_ID} has 1400 left to refund on its payment`,
+          `Invoice ${STRIPE_FIXTURES.INVOICE_ID} has $14.00 left to refund on its payment`,
           { provider: CashierProvider.Stripe },
         ),
       );
@@ -1287,6 +1287,18 @@ describe('StripeInvoicesResource', () => {
       ).rejects.toThrow(ValidationError);
 
       expect(client.creditNotes.create).not.toHaveBeenCalled();
+    });
+
+    it('should name the line and what is left on it in the invoice currency', async () => {
+      await expect(
+        invoices.refundLineItems(STRIPE_FIXTURES.INVOICE_ID, {
+          lineItems: [{ lineItemId: 'il_addon_2', amount: 2001 }],
+        }),
+      ).rejects.toThrow(
+        new ValidationError('Line il_addon_2 has $20.00 left to refund', {
+          provider: CashierProvider.Stripe,
+        }),
+      );
     });
 
     it('should reject an invoice that is not paid without crediting', async () => {

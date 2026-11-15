@@ -7,3 +7,8 @@ export const toMinorUnits = (majorUnits: number, currency: string): number =>
 
 export const toMajorUnits = (minorUnits: number, currency: string): number =>
   minorUnits / 10 ** getCurrencyExponent(currency);
+
+export const formatMoney = (minorUnits: number, currency: string): string =>
+  new Intl.NumberFormat('en', { style: 'currency', currency }).format(
+    toMajorUnits(minorUnits, currency),
+  );

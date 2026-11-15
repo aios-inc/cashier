@@ -270,9 +270,10 @@ export class RecurlyInvoicesResource implements InvoicesResource<CashierProvider
       const amountsRefunded = isRetrySafe
         ? new Map<string, number>()
         : await this.amountsRefundedByLineItem(invoice);
-      const lineItems = resolveRefundLineItems(
+      const lineItems = resolveRefundLineItems({
         invoiceId,
-        (invoice.lineItems ?? []).map((lineItem) =>
+        currency,
+        invoiceLineItems: (invoice.lineItems ?? []).map((lineItem) =>
           mapRecurlyInvoiceLineItem(
             lineItem,
             currency,
@@ -280,17 +281,24 @@ export class RecurlyInvoicesResource implements InvoicesResource<CashierProvider
           ),
         ),
         params,
-        CashierProvider.Recurly,
-        { checkRemaining: !isRetrySafe },
-      );
+        provider: CashierProvider.Recurly,
+        checkRemaining: !isRetrySafe,
+      });
 
       if (!isRetrySafe) {
-        assertPaymentCoversRefund(
+        assertPaymentCoversRefund({
           invoiceId,
-          lineItems.reduce((total, { amount }) => total + amount, 0),
-          toMinorUnits(invoice.refundableAmount ?? invoice.paid ?? 0, currency),
-          CashierProvider.Recurly,
-        );
+          currency,
+          refundAmount: lineItems.reduce(
+            (total, { amount }) => total + amount,
+            0,
+          ),
+          paymentRemaining: toMinorUnits(
+            invoice.refundableAmount ?? invoice.paid ?? 0,
+            currency,
+          ),
+          provider: CashierProvider.Recurly,
+        });
       }
 
       return mapRecurlyCreditInvoice(
