@@ -1128,10 +1128,74 @@ describe('StripeInvoicesResource', () => {
       expect(client.creditNotes.create).toHaveBeenCalledWith(
         expect.objectContaining({
           reason: 'duplicate',
-          metadata: { order: 'order-42' },
+          metadata: { order: 'order-42', cashier_idempotency_key: 'refund-42' },
         }),
         { idempotencyKey: 'refund-42' },
       );
+    });
+
+    it('should return the earlier credit note when retried with the same idempotency key', async () => {
+      client.invoices.retrieve.mockResolvedValue({
+        ...PAID_INVOICE,
+        post_payment_credit_notes_amount: 2500,
+      });
+      client.creditNotes.list.mockResolvedValue({
+        data: [
+          createCreditNote(
+            'cn_123',
+            [createCreditNoteLine('il_addon_1', 2500)],
+            {
+              metadata: { cashier_idempotency_key: 'refund-42' },
+            },
+          ),
+        ],
+        has_more: false,
+      });
+      client.creditNotes.retrieve.mockResolvedValue(CREDIT_NOTE);
+
+      const refund = await invoices.refundLineItems(
+        STRIPE_FIXTURES.INVOICE_ID,
+        {
+          lineItems: [{ lineItemId: 'il_addon_1' }],
+          idempotencyKey: 'refund-42',
+        },
+      );
+
+      expect(client.creditNotes.retrieve).toHaveBeenCalledWith('cn_123', {
+        expand: ['refund'],
+      });
+      expect(client.creditNotes.preview).not.toHaveBeenCalled();
+      expect(client.creditNotes.create).not.toHaveBeenCalled();
+      expect(refund).toEqual(
+        expect.objectContaining({
+          id: 'cn_123',
+          lineItems: [{ lineItemId: 'il_addon_1', amount: 2500 }],
+        }),
+      );
+    });
+
+    it('should reject a refund above what is left on the payment without crediting', async () => {
+      client.invoices.retrieve.mockResolvedValue({
+        ...PAID_INVOICE,
+        charge: { id: 'ch_123', amount: 16400, amount_refunded: 15000 },
+      });
+
+      await expect(
+        invoices.refundLineItems(STRIPE_FIXTURES.INVOICE_ID, {
+          lineItems: [{ lineItemId: 'il_addon_1' }],
+        }),
+      ).rejects.toThrow(
+        new ValidationError(
+          `Invoice ${STRIPE_FIXTURES.INVOICE_ID} has 1400 left to refund on its payment`,
+          { provider: CashierProvider.Stripe },
+        ),
+      );
+
+      expect(client.invoices.retrieve).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.INVOICE_ID,
+        { expand: ['charge'] },
+      );
+      expect(client.creditNotes.create).not.toHaveBeenCalled();
     });
 
     it('should leave out a reason Stripe credit notes do not have', async () => {

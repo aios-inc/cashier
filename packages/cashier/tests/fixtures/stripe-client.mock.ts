@@ -27,6 +27,7 @@ export const createStripeClientMock = () => ({
     listLineItems: jest.fn(),
   },
   creditNotes: {
+    retrieve: jest.fn(),
     list: jest.fn(),
     listLineItems: jest.fn(),
     preview: jest.fn(),

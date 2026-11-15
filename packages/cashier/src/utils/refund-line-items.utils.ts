@@ -42,6 +42,7 @@ export const resolveRefundLineItems = (
   invoiceLineItems: InvoiceLineItem[],
   { lineItems }: RefundInvoiceLineItemsParams,
   provider: CashierProvider,
+  { checkRemaining = true }: { checkRemaining?: boolean } = {},
 ): InvoiceLineItemRefund[] =>
   lineItems.map(({ lineItemId, amount }) => {
     const lineItem = invoiceLineItems.find(({ id }) => id === lineItemId);
@@ -56,6 +57,10 @@ export const resolveRefundLineItems = (
     const refundable = Math.max(lineItem.amount - lineItem.amountRefunded, 0);
     const refundAmount = amount ?? refundable;
 
+    if (!checkRemaining && amount !== undefined) {
+      return { lineItemId, amount };
+    }
+
     if (refundAmount <= 0 || refundAmount > refundable) {
       return fail(
         `Line item ${lineItemId} has ${refundable} left to refund`,
@@ -65,3 +70,17 @@ export const resolveRefundLineItems = (
 
     return { lineItemId, amount: refundAmount };
   });
+
+export const assertPaymentCoversRefund = (
+  invoiceId: string,
+  refundAmount: number,
+  paymentRemaining: number,
+  provider: CashierProvider,
+): void => {
+  if (refundAmount > paymentRemaining) {
+    fail(
+      `Invoice ${invoiceId} has ${Math.max(paymentRemaining, 0)} left to refund on its payment`,
+      provider,
+    );
+  }
+};

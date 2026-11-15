@@ -30,6 +30,7 @@ import { ValidationError } from '../../../errors/validation.error';
 import { validateCreateInvoiceParams } from '../../../utils/create-params.utils';
 import { toMinorUnits } from '../../../utils/money.utils';
 import {
+  assertPaymentCoversRefund,
   resolveRefundLineItems,
   validateRefundLineItemsParams,
 } from '../../../utils/refund-line-items.utils';
@@ -242,6 +243,18 @@ export class RecurlyInvoicesResource implements InvoicesResource<CashierProvider
     return recurlyRequest(async () => {
       validateRefundLineItemsParams(params, CashierProvider.Recurly);
 
+      const isRetrySafe = params.idempotencyKey !== undefined;
+
+      if (
+        isRetrySafe &&
+        params.lineItems.some(({ amount }) => amount === undefined)
+      ) {
+        throw new ValidationError(
+          'Recurly needs an amount for every line item when an idempotency key is passed',
+          { provider: CashierProvider.Recurly },
+        );
+      }
+
       const invoice = await this.withLineItems(
         await this.client.getInvoice(invoiceId),
       );
@@ -254,7 +267,9 @@ export class RecurlyInvoicesResource implements InvoicesResource<CashierProvider
       }
 
       const currency = (invoice.currency ?? '').toUpperCase();
-      const amountsRefunded = await this.amountsRefundedByLineItem(invoice);
+      const amountsRefunded = isRetrySafe
+        ? new Map<string, number>()
+        : await this.amountsRefundedByLineItem(invoice);
       const lineItems = resolveRefundLineItems(
         invoiceId,
         (invoice.lineItems ?? []).map((lineItem) =>
@@ -266,7 +281,17 @@ export class RecurlyInvoicesResource implements InvoicesResource<CashierProvider
         ),
         params,
         CashierProvider.Recurly,
+        { checkRemaining: !isRetrySafe },
       );
+
+      if (!isRetrySafe) {
+        assertPaymentCoversRefund(
+          invoiceId,
+          lineItems.reduce((total, { amount }) => total + amount, 0),
+          toMinorUnits(invoice.refundableAmount ?? invoice.paid ?? 0, currency),
+          CashierProvider.Recurly,
+        );
+      }
 
       return mapRecurlyCreditInvoice(
         await refundRecurlyLineItems(

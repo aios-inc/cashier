@@ -67,6 +67,8 @@ export const STRIPE_CREDIT_NOTE_REASONS: Partial<
 
 export const RECURLY_LINE_ITEM_REFUND_METHOD = 'transaction_first';
 
+export const STRIPE_IDEMPOTENCY_METADATA_KEY = 'cashier_idempotency_key';
+
 export const STRIPE_INVOICE_RELATION_EXPAND: Record<
   CashierInvoiceRelations['stripe'],
   string[]

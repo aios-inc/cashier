@@ -1153,17 +1153,59 @@ describe('RecurlyInvoicesResource', () => {
       );
     });
 
-    it('should pass the idempotency key as a request header', async () => {
+    it('should pass the idempotency key as a request header and leave the remaining amounts to Recurly', async () => {
+      client.getInvoice.mockResolvedValue({
+        ...PAID_INVOICE,
+        refundableAmount: 139,
+      });
+
       await invoices.refundLineItems(RECURLY_FIXTURES.INVOICE_ID, {
-        lineItems: [{ lineItemId: 'li_addon_1' }],
+        lineItems: [{ lineItemId: 'li_addon_1', amount: 2500 }],
         idempotencyKey: 'refund-42',
       });
 
+      expect(client.listRelatedInvoices).not.toHaveBeenCalled();
       expect(client.refundInvoice).toHaveBeenCalledWith(
         RECURLY_FIXTURES.INVOICE_ID,
-        expect.any(Object),
+        expect.objectContaining({
+          lineItems: [{ id: 'li_addon_1', amount: 25 }],
+        }),
         { headers: { 'Idempotency-Key': 'refund-42' } },
       );
+    });
+
+    it('should reject an idempotency key without an amount for every line without calling Recurly', async () => {
+      await expect(
+        invoices.refundLineItems(RECURLY_FIXTURES.INVOICE_ID, {
+          lineItems: [{ lineItemId: 'li_addon_1' }],
+          idempotencyKey: 'refund-42',
+        }),
+      ).rejects.toThrow(ValidationError);
+
+      expect(client.getInvoice).not.toHaveBeenCalled();
+    });
+
+    it('should reject a refund above what is left on the invoice without refunding', async () => {
+      client.getInvoice.mockResolvedValue({
+        ...PAID_INVOICE,
+        refundableAmount: 30,
+      });
+
+      await expect(
+        invoices.refundLineItems(RECURLY_FIXTURES.INVOICE_ID, {
+          lineItems: [
+            { lineItemId: 'li_addon_1' },
+            { lineItemId: 'li_addon_2' },
+          ],
+        }),
+      ).rejects.toThrow(
+        new ValidationError(
+          `Invoice ${RECURLY_FIXTURES.INVOICE_ID} has 3000 left to refund on its payment`,
+          { provider: CashierProvider.Recurly },
+        ),
+      );
+
+      expect(client.refundInvoice).not.toHaveBeenCalled();
     });
 
     it('should refund only what earlier credit invoices left on the line', async () => {

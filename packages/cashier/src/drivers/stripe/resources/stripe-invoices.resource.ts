@@ -13,6 +13,7 @@ import {
   PayInvoiceParams,
   PreviewInvoiceParams,
   ProviderInvoiceRelation,
+  InvoiceLineItemRefund,
   InvoiceRefund,
   RefundInvoiceLineItemsParams,
 } from '../../../types/invoice.types';
@@ -22,12 +23,14 @@ import {
   DEFAULT_DAYS_UNTIL_DUE,
   DEFAULT_LIST_LIMIT,
   STRIPE_CREDIT_NOTE_REASONS,
+  STRIPE_IDEMPOTENCY_METADATA_KEY,
   STRIPE_INVOICE_RELATION_EXPAND,
   STRIPE_PRORATION_BEHAVIORS,
 } from '../../../constants/cashier.constants';
 import { ValidationError } from '../../../errors/validation.error';
 import { validateCreateInvoiceParams } from '../../../utils/create-params.utils';
 import {
+  assertPaymentCoversRefund,
   resolveRefundLineItems,
   validateRefundLineItemsParams,
 } from '../../../utils/refund-line-items.utils';
@@ -39,6 +42,7 @@ import {
   mapStripeInvoicePreview,
 } from '../mappers/stripe-invoice.mapper';
 import {
+  getExpanded,
   toStripeCursorPaginator,
   toStripeExpand,
   toStripeRequestOptions,
@@ -66,6 +70,32 @@ const resolveInvoiceRelations = <Relation extends StripeInvoiceRelation>(
   );
 
 const STRIPE_LINE_ITEMS_PAGE_SIZE = 100;
+
+interface StripeCreditNoteWithLines {
+  creditNote: Stripe.CreditNote;
+  lines: Stripe.CreditNoteLineItem[];
+}
+
+const toInvoiceLineItemRefunds = (
+  lines: Stripe.CreditNoteLineItem[],
+): InvoiceLineItemRefund[] =>
+  lines.flatMap(({ invoice_line_item, amount }) =>
+    invoice_line_item ? [{ lineItemId: invoice_line_item, amount }] : [],
+  );
+
+const sumCreditedByLineItem = (
+  creditNotes: StripeCreditNoteWithLines[],
+): Map<string, number> => {
+  const amounts = new Map<string, number>();
+
+  for (const { lineItemId, amount } of creditNotes.flatMap(({ lines }) =>
+    toInvoiceLineItemRefunds(lines),
+  )) {
+    amounts.set(lineItemId, (amounts.get(lineItemId) ?? 0) + amount);
+  }
+
+  return amounts;
+};
 
 const toStripeInvoiceScope = ({
   customer,
@@ -337,7 +367,7 @@ export class StripeInvoicesResource implements InvoicesResource<CashierProvider.
       validateRefundLineItemsParams(params, CashierProvider.Stripe);
 
       const invoice = await this.withLineItems(
-        await this.client.invoices.retrieve(invoiceId),
+        await this.client.invoices.retrieve(invoiceId, { expand: ['charge'] }),
       );
 
       if (invoice.status !== 'paid') {
@@ -347,7 +377,25 @@ export class StripeInvoicesResource implements InvoicesResource<CashierProvider.
         );
       }
 
-      const amountsRefunded = await this.amountsRefundedByLineItem(invoice);
+      const creditNotes = await this.creditNotesOf(invoice);
+      const earlierRefund = params.idempotencyKey
+        ? creditNotes.find(
+            ({ creditNote }) =>
+              creditNote.metadata?.[STRIPE_IDEMPOTENCY_METADATA_KEY] ===
+              params.idempotencyKey,
+          )
+        : undefined;
+
+      if (earlierRefund) {
+        return mapStripeCreditNote(
+          await this.client.creditNotes.retrieve(earlierRefund.creditNote.id, {
+            expand: ['refund'],
+          }),
+          toInvoiceLineItemRefunds(earlierRefund.lines),
+        );
+      }
+
+      const amountsRefunded = sumCreditedByLineItem(creditNotes);
       const lineItems = resolveRefundLineItems(
         invoiceId,
         invoice.lines.data.map((lineItem) =>
@@ -367,14 +415,29 @@ export class StripeInvoicesResource implements InvoicesResource<CashierProvider.
         invoice: invoiceId,
         lines,
       });
+      const charge = getExpanded(invoice.charge);
+
+      assertPaymentCoversRefund(
+        invoiceId,
+        preview.amount,
+        charge ? charge.amount - charge.amount_refunded : invoice.amount_paid,
+        CashierProvider.Stripe,
+      );
+
       const reason = params.reason && STRIPE_CREDIT_NOTE_REASONS[params.reason];
+      const metadata = {
+        ...params.metadata,
+        ...(params.idempotencyKey
+          ? { [STRIPE_IDEMPOTENCY_METADATA_KEY]: params.idempotencyKey }
+          : {}),
+      };
       const creditNote = await this.client.creditNotes.create(
         {
           invoice: invoiceId,
           lines,
           refund_amount: preview.amount,
           ...(reason ? { reason } : {}),
-          ...(params.metadata ? { metadata: params.metadata } : {}),
+          ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
           expand: ['refund'],
         },
         ...toStripeRequestOptions(params.idempotencyKey),
@@ -397,16 +460,14 @@ export class StripeInvoicesResource implements InvoicesResource<CashierProvider.
     return mapStripeInvoice(
       withLineItems,
       relations,
-      await this.amountsRefundedByLineItem(withLineItems),
+      sumCreditedByLineItem(await this.creditNotesOf(withLineItems)),
     ) as InvoiceWith<Relation>;
   }
 
-  private async amountsRefundedByLineItem(
+  private async creditNotesOf(
     invoice: Stripe.Invoice,
-  ): Promise<Map<string, number>> {
-    const amounts = new Map<string, number>();
-
-    if (!invoice.post_payment_credit_notes_amount) return amounts;
+  ): Promise<StripeCreditNoteWithLines[]> {
+    if (!invoice.post_payment_credit_notes_amount) return [];
 
     const listCreditNotes = (startingAfter?: string) =>
       this.client.creditNotes.list({
@@ -418,32 +479,23 @@ export class StripeInvoicesResource implements InvoicesResource<CashierProvider.
       await listCreditNotes(),
       listCreditNotes,
     );
-    const creditNoteLines = await Promise.all(
+
+    return Promise.all(
       creditNotes
         .filter(
           (creditNote) =>
             creditNote.type === 'post_payment' && creditNote.status !== 'void',
         )
-        .map((creditNote) =>
-          readAllStripeItems(creditNote.lines, (startingAfter) =>
+        .map(async (creditNote) => ({
+          creditNote,
+          lines: await readAllStripeItems(creditNote.lines, (startingAfter) =>
             this.client.creditNotes.listLineItems(creditNote.id, {
               limit: STRIPE_LINE_ITEMS_PAGE_SIZE,
               starting_after: startingAfter,
             }),
           ),
-        ),
+        })),
     );
-
-    for (const line of creditNoteLines.flat()) {
-      if (!line.invoice_line_item) continue;
-
-      amounts.set(
-        line.invoice_line_item,
-        (amounts.get(line.invoice_line_item) ?? 0) + line.amount,
-      );
-    }
-
-    return amounts;
   }
 
   private async withLineItems(
