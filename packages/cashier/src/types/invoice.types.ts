@@ -56,6 +56,7 @@ export interface InvoiceLineItem {
   periodStart: Date | null;
   periodEnd: Date | null;
   proration: boolean;
+  recurring: boolean;
   amountRefunded: number;
 }
 

@@ -46,6 +46,7 @@ export const mapStripeInvoiceLineItem = (
   periodStart: fromUnixSeconds(lineItem.period?.start),
   periodEnd: fromUnixSeconds(lineItem.period?.end),
   proration: lineItem.proration,
+  recurring: lineItem.type === 'subscription',
   amountRefunded,
 });
 

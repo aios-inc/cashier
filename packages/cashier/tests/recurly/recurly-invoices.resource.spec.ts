@@ -35,6 +35,7 @@ const PLAN_LINE_ITEM = {
   startDate: new Date('2026-01-01T00:00:00Z'),
   endDate: new Date('2026-02-01T00:00:00Z'),
   prorationRate: null,
+  origin: 'plan',
 } as recurly.LineItem;
 
 const PRORATED_CREDIT_LINE_ITEM = {
@@ -62,6 +63,7 @@ const EXPECTED_PLAN_LINE_ITEM = {
   periodStart: new Date('2026-01-01T00:00:00Z'),
   periodEnd: new Date('2026-02-01T00:00:00Z'),
   proration: false,
+  recurring: true,
   amountRefunded: 0,
 };
 
@@ -76,6 +78,7 @@ const EXPECTED_PRORATED_CREDIT_LINE_ITEM = {
   periodStart: null,
   periodEnd: null,
   proration: true,
+  recurring: false,
   amountRefunded: 0,
 };
 
@@ -874,6 +877,7 @@ describe('RecurlyInvoicesResource', () => {
       periodStart: new Date('2026-02-01T00:00:00Z'),
       periodEnd: null,
       proration: false,
+      recurring: true,
       amountRefunded: 0,
     });
 
@@ -1321,5 +1325,34 @@ describe('RecurlyInvoicesResource', () => {
 
       expect(client.listRelatedInvoices).not.toHaveBeenCalled();
     });
+  });
+
+  describe('get with one-off line items', () => {
+    it.each([
+      ['plan', true],
+      ['plan_trial', true],
+      ['add_on', true],
+      ['add_on_trial', true],
+      ['one_time', false],
+      ['debit', false],
+      [null, false],
+    ])(
+      'should map a line with origin %s as recurring %s',
+      async (origin, recurring) => {
+        client.getInvoice.mockResolvedValue({
+          ...RECURLY_FIXTURES.INVOICES[0],
+          lineItems: [{ ...PLAN_LINE_ITEM, origin }],
+          hasMoreLineItems: false,
+        });
+
+        const invoice = await invoices.get(RECURLY_FIXTURES.INVOICE_ID, {
+          with: ['lineItems'],
+        });
+
+        expect(invoice.lineItems).toEqual([
+          { ...EXPECTED_PLAN_LINE_ITEM, recurring },
+        ]);
+      },
+    );
   });
 });

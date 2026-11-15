@@ -67,6 +67,10 @@ export const STRIPE_CREDIT_NOTE_REASONS: Partial<
 
 export const RECURLY_LINE_ITEM_REFUND_METHOD = 'transaction_first';
 
+export const RECURLY_RECURRING_LINE_ITEM_ORIGINS: ReadonlySet<string> = new Set(
+  ['plan', 'plan_trial', 'add_on', 'add_on_trial'],
+);
+
 export const STRIPE_IDEMPOTENCY_METADATA_KEY = 'cashier_idempotency_key';
 
 export const STRIPE_INVOICE_RELATION_EXPAND: Record<
