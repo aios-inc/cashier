@@ -5,7 +5,9 @@ import {
   InvoiceEvent,
   InvoiceEventType,
   InvoiceLineItem,
+  InvoiceLineItemRefund,
   InvoicePreview,
+  InvoiceRefund,
   InvoiceRelation,
   InvoiceStatus,
   InvoiceWith,
@@ -16,6 +18,7 @@ import {
   getExpanded,
 } from './stripe-mapper.utils';
 import { mapStripePayment } from './stripe-payment.mapper';
+import { mapStripeRefund } from './stripe-refund.mapper';
 
 const STRIPE_INVOICE_TRANSITIONS: [
   keyof Stripe.Invoice.StatusTransitions,
@@ -31,6 +34,7 @@ const toList = (value: string | null): string[] => (value ? [value] : []);
 
 export const mapStripeInvoiceLineItem = (
   lineItem: Stripe.InvoiceLineItem,
+  amountRefunded = 0,
 ): InvoiceLineItem => ({
   id: lineItem.id,
   description: lineItem.description,
@@ -42,6 +46,7 @@ export const mapStripeInvoiceLineItem = (
   periodStart: fromUnixSeconds(lineItem.period?.start),
   periodEnd: fromUnixSeconds(lineItem.period?.end),
   proration: lineItem.proration,
+  amountRefunded,
 });
 
 const mapStripeInvoiceTimeline = (invoice: Stripe.Invoice): InvoiceEvent[] => {
@@ -63,6 +68,7 @@ const mapStripeInvoiceTimeline = (invoice: Stripe.Invoice): InvoiceEvent[] => {
 export const mapStripeInvoice = (
   invoice: Stripe.Invoice,
   relations: ReadonlySet<InvoiceRelation> = new Set(),
+  amountsRefundedByLineItem: ReadonlyMap<string, number> = new Map(),
 ): Invoice & Partial<InvoiceWith<InvoiceRelation>> => {
   const paymentIntent = getExpanded(invoice.payment_intent);
 
@@ -90,7 +96,12 @@ export const mapStripeInvoice = (
       : {}),
     ...(relations.has('lineItems')
       ? {
-          lineItems: (invoice.lines?.data ?? []).map(mapStripeInvoiceLineItem),
+          lineItems: (invoice.lines?.data ?? []).map((lineItem) =>
+            mapStripeInvoiceLineItem(
+              lineItem,
+              amountsRefundedByLineItem.get(lineItem.id),
+            ),
+          ),
         }
       : {}),
     ...(relations.has('payments')
@@ -117,7 +128,25 @@ export const mapStripeInvoicePreview = (
   tax: invoice.tax ?? 0,
   total: invoice.total,
   amountDue: invoice.amount_due,
-  lineItems: lineItems.map(mapStripeInvoiceLineItem),
+  lineItems: lineItems.map((lineItem) => mapStripeInvoiceLineItem(lineItem)),
   nextPaymentAt: fromUnixSeconds(invoice.next_payment_attempt),
   provider: CashierProvider.Stripe,
 });
+
+export const mapStripeCreditNote = (
+  creditNote: Stripe.CreditNote,
+  lineItems: InvoiceLineItemRefund[],
+): InvoiceRefund => {
+  const refund = getExpanded(creditNote.refund);
+
+  return {
+    id: creditNote.id,
+    invoiceId: getExpandableId(creditNote.invoice) ?? '',
+    amount: refund?.amount ?? creditNote.amount,
+    currency: creditNote.currency.toUpperCase(),
+    lineItems,
+    refunds: refund ? [mapStripeRefund(refund)] : [],
+    createdAt: new Date(creditNote.created * 1000),
+    provider: CashierProvider.Stripe,
+  };
+};

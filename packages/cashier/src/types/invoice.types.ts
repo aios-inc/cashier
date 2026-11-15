@@ -1,6 +1,11 @@
 import { CashierProvider, ProviderCapabilities } from './cashier.types';
 import { CursorPaginateParams, CursorPaginator } from './pagination.types';
-import { Payment, SendReceiptParams } from './payment.types';
+import {
+  Payment,
+  Refund,
+  RefundReason,
+  SendReceiptParams,
+} from './payment.types';
 import {
   LoadedRelations,
   ProviderRelation,
@@ -51,6 +56,7 @@ export interface InvoiceLineItem {
   periodStart: Date | null;
   periodEnd: Date | null;
   proration: boolean;
+  amountRefunded: number;
 }
 
 export type InvoiceEventType =
@@ -152,6 +158,34 @@ export interface InvoicePreview {
   provider: CashierProvider;
 }
 
+export interface RefundInvoiceLineItem {
+  lineItemId: string;
+  amount?: number;
+}
+
+export interface RefundInvoiceLineItemsParams {
+  lineItems: RefundInvoiceLineItem[];
+  reason?: RefundReason;
+  metadata?: Record<string, string>;
+  idempotencyKey?: string;
+}
+
+export interface InvoiceLineItemRefund {
+  lineItemId: string;
+  amount: number;
+}
+
+export interface InvoiceRefund {
+  id: string;
+  invoiceId: string;
+  amount: number;
+  currency: string;
+  lineItems: InvoiceLineItemRefund[];
+  refunds: Refund[];
+  createdAt: Date;
+  provider: CashierProvider;
+}
+
 export interface InvoiceReceipts {
   sendReceipt(invoiceId: string, params?: SendReceiptParams): Promise<void>;
 }
@@ -178,6 +212,10 @@ export interface InvoicesResourceMethods<
   pay(invoiceId: string, params?: PayInvoiceParams): Promise<Invoice>;
   void(invoiceId: string): Promise<Invoice>;
   preview(params: PreviewInvoiceParams): Promise<InvoicePreview>;
+  refundLineItems(
+    invoiceId: string,
+    params: RefundInvoiceLineItemsParams,
+  ): Promise<InvoiceRefund>;
 }
 
 export type InvoicesResource<

@@ -13,6 +13,8 @@ import {
   PayInvoiceParams,
   PreviewInvoiceParams,
   ProviderInvoiceRelation,
+  InvoiceRefund,
+  RefundInvoiceLineItemsParams,
 } from '../../../types/invoice.types';
 import { CursorPaginator } from '../../../types/pagination.types';
 import {
@@ -26,12 +28,21 @@ import {
 import { UnsupportedOperationError } from '../../../errors/unsupported-operation.error';
 import { ValidationError } from '../../../errors/validation.error';
 import { validateCreateInvoiceParams } from '../../../utils/create-params.utils';
+import { toMinorUnits } from '../../../utils/money.utils';
+import {
+  assertPaymentCoversRefund,
+  resolveRefundLineItems,
+  validateRefundLineItemsParams,
+} from '../../../utils/refund-line-items.utils';
 import { resolveRelations } from '../../../utils/relations.utils';
 import {
+  mapRecurlyCreditInvoice,
   mapRecurlyInvoice,
+  mapRecurlyInvoiceLineItem,
   mapRecurlyInvoicePreview,
   mapRecurlySubscriptionPreview,
 } from '../mappers/recurly-invoice.mapper';
+import { refundRecurlyLineItems } from '../recurly-line-item-refund';
 import { readRecurlyItems, readRecurlyPage } from '../recurly-page';
 import {
   createRecurlyPurchase,
@@ -225,6 +236,77 @@ export class RecurlyInvoicesResource implements InvoicesResource<CashierProvider
     });
   }
 
+  refundLineItems(
+    invoiceId: string,
+    params: RefundInvoiceLineItemsParams,
+  ): Promise<InvoiceRefund> {
+    return recurlyRequest(async () => {
+      validateRefundLineItemsParams(params, CashierProvider.Recurly);
+
+      const isRetrySafe = params.idempotencyKey !== undefined;
+
+      if (
+        isRetrySafe &&
+        params.lineItems.some(({ amount }) => amount === undefined)
+      ) {
+        throw new ValidationError(
+          'Recurly needs an amount for every line item when an idempotency key is passed',
+          { provider: CashierProvider.Recurly },
+        );
+      }
+
+      const invoice = await this.withLineItems(
+        await this.client.getInvoice(invoiceId),
+      );
+
+      if (invoice.state !== 'paid') {
+        throw new ValidationError(
+          `Only a paid invoice can be refunded, and invoice ${invoiceId} is ${invoice.state}`,
+          { provider: CashierProvider.Recurly },
+        );
+      }
+
+      const currency = (invoice.currency ?? '').toUpperCase();
+      const amountsRefunded = isRetrySafe
+        ? new Map<string, number>()
+        : await this.amountsRefundedByLineItem(invoice);
+      const lineItems = resolveRefundLineItems(
+        invoiceId,
+        (invoice.lineItems ?? []).map((lineItem) =>
+          mapRecurlyInvoiceLineItem(
+            lineItem,
+            currency,
+            amountsRefunded.get(lineItem.id ?? ''),
+          ),
+        ),
+        params,
+        CashierProvider.Recurly,
+        { checkRemaining: !isRetrySafe },
+      );
+
+      if (!isRetrySafe) {
+        assertPaymentCoversRefund(
+          invoiceId,
+          lineItems.reduce((total, { amount }) => total + amount, 0),
+          toMinorUnits(invoice.refundableAmount ?? invoice.paid ?? 0, currency),
+          CashierProvider.Recurly,
+        );
+      }
+
+      return mapRecurlyCreditInvoice(
+        await refundRecurlyLineItems(
+          this.client,
+          invoiceId,
+          currency,
+          lineItems,
+          params.idempotencyKey,
+        ),
+        invoiceId,
+        lineItems,
+      );
+    });
+  }
+
   private toInvoiceMapper<Relation extends RecurlyInvoiceRelation>(
     requested?: readonly Relation[],
   ): RecurlyInvoiceMapper<Relation> {
@@ -237,16 +319,71 @@ export class RecurlyInvoicesResource implements InvoicesResource<CashierProvider
 
     return async (invoices) =>
       Promise.all(
-        invoices.map(
-          async (invoice) =>
-            mapRecurlyInvoice(
-              relations.has('lineItems')
-                ? await this.withLineItems(invoice)
-                : invoice,
+        invoices.map(async (invoice) => {
+          if (!relations.has('lineItems')) {
+            return mapRecurlyInvoice(
+              invoice,
               relations,
-            ) as InvoiceWith<Relation>,
-        ),
+            ) as InvoiceWith<Relation>;
+          }
+
+          const withLineItems = await this.withLineItems(invoice);
+
+          return mapRecurlyInvoice(
+            withLineItems,
+            relations,
+            await this.amountsRefundedByLineItem(withLineItems),
+          ) as InvoiceWith<Relation>;
+        }),
       );
+  }
+
+  private async amountsRefundedByLineItem(
+    invoice: recurly.Invoice,
+  ): Promise<Map<string, number>> {
+    const amounts = new Map<string, number>();
+    const currency = (invoice.currency ?? '').toUpperCase();
+    const refundable = invoice.refundableAmount;
+
+    if (
+      !invoice.id ||
+      invoice.type !== 'charge' ||
+      typeof refundable !== 'number' ||
+      toMinorUnits(invoice.paid ?? 0, currency) <=
+        toMinorUnits(refundable, currency)
+    ) {
+      return amounts;
+    }
+
+    const relatedInvoices = await readRecurlyItems(
+      this.client.listRelatedInvoices(invoice.id, {
+        params: { limit: RECURLY_MAX_LIST_LIMIT },
+      }),
+    );
+    const creditInvoices = await Promise.all(
+      relatedInvoices
+        .filter(
+          (related) => related.type === 'credit' && related.state !== 'voided',
+        )
+        .map((related) => this.withLineItems(related)),
+    );
+
+    for (const lineItem of creditInvoices.flatMap(
+      (creditInvoice) => creditInvoice.lineItems ?? [],
+    )) {
+      if (!lineItem.previousLineItemId) continue;
+
+      amounts.set(
+        lineItem.previousLineItemId,
+        (amounts.get(lineItem.previousLineItemId) ?? 0) +
+          toMinorUnits(
+            Math.abs(lineItem.amount ?? 0),
+            (lineItem.currency ?? currency).toUpperCase(),
+          ),
+      );
+    }
+
+    return amounts;
   }
 
   private async withLineItems(
