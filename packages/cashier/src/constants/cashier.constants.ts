@@ -58,6 +58,15 @@ export const STRIPE_REFUND_REASONS: Record<
   [RefundReason.RequestedByCustomer]: 'requested_by_customer',
 };
 
+export const STRIPE_CREDIT_NOTE_REASONS: Partial<
+  Record<RefundReason, Stripe.CreditNoteCreateParams.Reason>
+> = {
+  [RefundReason.Duplicate]: 'duplicate',
+  [RefundReason.Fraudulent]: 'fraudulent',
+};
+
+export const RECURLY_LINE_ITEM_REFUND_METHOD = 'transaction_first';
+
 export const STRIPE_INVOICE_RELATION_EXPAND: Record<
   CashierInvoiceRelations['stripe'],
   string[]

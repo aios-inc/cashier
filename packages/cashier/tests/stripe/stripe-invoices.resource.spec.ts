@@ -13,6 +13,7 @@ import {
 } from '../fixtures/stripe-client.mock';
 import { CashierProvider } from '../../src/types/cashier.types';
 import { CreateInvoiceParams } from '../../src/types/invoice.types';
+import { RefundReason } from '../../src/types/payment.types';
 
 const createLine = (id: string, overrides: Record<string, unknown> = {}) => ({
   id,
@@ -37,6 +38,7 @@ const expectedLine = (id: string, overrides: Record<string, unknown> = {}) => ({
   periodStart: new Date(1767225600 * 1000),
   periodEnd: new Date(1769904000 * 1000),
   proration: false,
+  amountRefunded: 0,
   ...overrides,
 });
 
@@ -985,6 +987,311 @@ describe('StripeInvoicesResource', () => {
         provider: CashierProvider.Stripe,
       });
       expect(client.charges.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('refundLineItems', () => {
+    const PAID_INVOICE = {
+      ...STRIPE_FIXTURES.SUBSCRIPTION_INVOICE,
+      post_payment_credit_notes_amount: 0,
+      lines: {
+        data: [
+          createLine('il_plan', { amount: 11900 }),
+          createLine('il_addon_1', { amount: 2500, subscription: null }),
+          createLine('il_addon_2', { amount: 2000, subscription: null }),
+        ],
+        has_more: false,
+      },
+    };
+
+    const CREDIT_NOTE = {
+      id: 'cn_123',
+      invoice: STRIPE_FIXTURES.INVOICE_ID,
+      amount: 2500,
+      currency: 'gbp',
+      created: 1767312000,
+      refund: {
+        id: 're_123',
+        payment_intent: 'pi_123',
+        status: 'succeeded',
+        amount: 2500,
+        currency: 'gbp',
+        reason: null,
+        created: 1767312000,
+      },
+    };
+
+    const createCreditNoteLine = (invoiceLineItem: string, amount: number) => ({
+      id: `cnli_${invoiceLineItem}`,
+      invoice_line_item: invoiceLineItem,
+      amount,
+    });
+
+    const createCreditNote = (
+      id: string,
+      lines: ReturnType<typeof createCreditNoteLine>[],
+      overrides: Record<string, unknown> = {},
+    ) => ({
+      id,
+      type: 'post_payment',
+      status: 'issued',
+      lines: { data: lines, has_more: false },
+      ...overrides,
+    });
+
+    beforeEach(() => {
+      client.invoices.retrieve.mockResolvedValue(PAID_INVOICE);
+      client.creditNotes.preview.mockResolvedValue({ amount: 2500 });
+      client.creditNotes.create.mockResolvedValue(CREDIT_NOTE);
+    });
+
+    it('should credit the chosen line and refund the previewed total', async () => {
+      const refund = await invoices.refundLineItems(
+        STRIPE_FIXTURES.INVOICE_ID,
+        { lineItems: [{ lineItemId: 'il_addon_1' }] },
+      );
+
+      const lines = [
+        {
+          type: 'invoice_line_item',
+          invoice_line_item: 'il_addon_1',
+          amount: 2500,
+        },
+      ];
+      expect(client.creditNotes.preview).toHaveBeenCalledWith({
+        invoice: STRIPE_FIXTURES.INVOICE_ID,
+        lines,
+      });
+      expect(client.creditNotes.create).toHaveBeenCalledWith({
+        invoice: STRIPE_FIXTURES.INVOICE_ID,
+        lines,
+        refund_amount: 2500,
+        expand: ['refund'],
+      });
+      expect(refund).toEqual({
+        id: 'cn_123',
+        invoiceId: STRIPE_FIXTURES.INVOICE_ID,
+        amount: 2500,
+        currency: 'GBP',
+        lineItems: [{ lineItemId: 'il_addon_1', amount: 2500 }],
+        refunds: [
+          {
+            id: 're_123',
+            paymentId: 'pi_123',
+            status: 'succeeded',
+            amount: 2500,
+            currency: 'GBP',
+            reason: null,
+            createdAt: new Date(1767312000 * 1000),
+            provider: CashierProvider.Stripe,
+          },
+        ],
+        createdAt: new Date(1767312000 * 1000),
+        provider: CashierProvider.Stripe,
+      });
+    });
+
+    it('should credit several lines with the given amounts in one credit note', async () => {
+      await invoices.refundLineItems(STRIPE_FIXTURES.INVOICE_ID, {
+        lineItems: [
+          { lineItemId: 'il_addon_1', amount: 1000 },
+          { lineItemId: 'il_addon_2' },
+        ],
+      });
+
+      expect(client.creditNotes.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lines: [
+            {
+              type: 'invoice_line_item',
+              invoice_line_item: 'il_addon_1',
+              amount: 1000,
+            },
+            {
+              type: 'invoice_line_item',
+              invoice_line_item: 'il_addon_2',
+              amount: 2000,
+            },
+          ],
+        }),
+      );
+    });
+
+    it('should pass a supported reason, the metadata and the idempotency key', async () => {
+      await invoices.refundLineItems(STRIPE_FIXTURES.INVOICE_ID, {
+        lineItems: [{ lineItemId: 'il_addon_1' }],
+        reason: RefundReason.Duplicate,
+        metadata: { order: 'order-42' },
+        idempotencyKey: 'refund-42',
+      });
+
+      expect(client.creditNotes.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: 'duplicate',
+          metadata: { order: 'order-42' },
+        }),
+        { idempotencyKey: 'refund-42' },
+      );
+    });
+
+    it('should leave out a reason Stripe credit notes do not have', async () => {
+      await invoices.refundLineItems(STRIPE_FIXTURES.INVOICE_ID, {
+        lineItems: [{ lineItemId: 'il_addon_1' }],
+        reason: RefundReason.RequestedByCustomer,
+      });
+
+      expect(client.creditNotes.create.mock.calls[0][0]).not.toHaveProperty(
+        'reason',
+      );
+    });
+
+    it('should refund only what earlier credit notes left on the line', async () => {
+      client.invoices.retrieve.mockResolvedValue({
+        ...PAID_INVOICE,
+        post_payment_credit_notes_amount: 1500,
+      });
+      client.creditNotes.list.mockResolvedValue({
+        data: [
+          createCreditNote('cn_1', [createCreditNoteLine('il_addon_1', 1000)]),
+          createCreditNote('cn_2', [createCreditNoteLine('il_addon_1', 500)], {
+            status: 'void',
+          }),
+          createCreditNote('cn_3', [createCreditNoteLine('il_addon_1', 500)], {
+            type: 'pre_payment',
+          }),
+        ],
+        has_more: false,
+      });
+
+      await invoices.refundLineItems(STRIPE_FIXTURES.INVOICE_ID, {
+        lineItems: [{ lineItemId: 'il_addon_1' }],
+      });
+
+      expect(client.creditNotes.list).toHaveBeenCalledWith({
+        invoice: STRIPE_FIXTURES.INVOICE_ID,
+        limit: 100,
+      });
+      expect(client.creditNotes.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lines: [
+            {
+              type: 'invoice_line_item',
+              invoice_line_item: 'il_addon_1',
+              amount: 1500,
+            },
+          ],
+        }),
+      );
+    });
+
+    it.each([
+      ['no line items', { lineItems: [] }],
+      [
+        'the same line twice',
+        {
+          lineItems: [
+            { lineItemId: 'il_addon_1' },
+            { lineItemId: 'il_addon_1' },
+          ],
+        },
+      ],
+      [
+        'an amount that is not a positive integer',
+        { lineItems: [{ lineItemId: 'il_addon_1', amount: 10.5 }] },
+      ],
+    ])('should reject %s without calling Stripe', async (_, params) => {
+      await expect(
+        invoices.refundLineItems(STRIPE_FIXTURES.INVOICE_ID, params),
+      ).rejects.toThrow(ValidationError);
+
+      expect(client.invoices.retrieve).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a line that is not on the invoice', { lineItemId: 'il_other' }],
+      [
+        'more than is left on the line',
+        { lineItemId: 'il_addon_1', amount: 2501 },
+      ],
+    ])('should reject %s without crediting', async (_, lineItem) => {
+      await expect(
+        invoices.refundLineItems(STRIPE_FIXTURES.INVOICE_ID, {
+          lineItems: [lineItem],
+        }),
+      ).rejects.toThrow(ValidationError);
+
+      expect(client.creditNotes.create).not.toHaveBeenCalled();
+    });
+
+    it('should reject an invoice that is not paid without crediting', async () => {
+      client.invoices.retrieve.mockResolvedValue({
+        ...PAID_INVOICE,
+        status: 'open',
+      });
+
+      await expect(
+        invoices.refundLineItems(STRIPE_FIXTURES.INVOICE_ID, {
+          lineItems: [{ lineItemId: 'il_addon_1' }],
+        }),
+      ).rejects.toThrow(ValidationError);
+
+      expect(client.creditNotes.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('get with line item refunds', () => {
+    it('should add what post-payment credit notes credited to each line', async () => {
+      client.invoices.retrieve.mockResolvedValue({
+        ...STRIPE_FIXTURES.SUBSCRIPTION_INVOICE,
+        post_payment_credit_notes_amount: 3000,
+        lines: {
+          data: [createLine('il_1'), createLine('il_2')],
+          has_more: false,
+        },
+      });
+      client.creditNotes.list.mockResolvedValue({
+        data: [
+          {
+            id: 'cn_1',
+            type: 'post_payment',
+            status: 'issued',
+            lines: {
+              data: [{ id: 'cnli_1', invoice_line_item: 'il_1', amount: 1000 }],
+              has_more: true,
+            },
+          },
+        ],
+        has_more: false,
+      });
+      client.creditNotes.listLineItems.mockResolvedValue({
+        data: [{ id: 'cnli_2', invoice_line_item: 'il_1', amount: 2000 }],
+        has_more: false,
+      });
+
+      const invoice = await invoices.get(STRIPE_FIXTURES.INVOICE_ID, {
+        with: ['lineItems'],
+      });
+
+      expect(client.creditNotes.listLineItems).toHaveBeenCalledWith('cn_1', {
+        limit: 100,
+        starting_after: 'cnli_1',
+      });
+      expect(invoice.lineItems).toEqual([
+        expectedLine('il_1', { amountRefunded: 3000 }),
+        expectedLine('il_2'),
+      ]);
+    });
+
+    it('should not list credit notes when nothing was credited after payment', async () => {
+      client.invoices.retrieve.mockResolvedValue({
+        ...STRIPE_FIXTURES.SUBSCRIPTION_INVOICE,
+        post_payment_credit_notes_amount: 0,
+        lines: { data: [createLine('il_1')], has_more: false },
+      });
+
+      await invoices.get(STRIPE_FIXTURES.INVOICE_ID, { with: ['lineItems'] });
+
+      expect(client.creditNotes.list).not.toHaveBeenCalled();
     });
   });
 });

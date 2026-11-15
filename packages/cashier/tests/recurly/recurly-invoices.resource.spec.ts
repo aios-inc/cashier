@@ -62,6 +62,7 @@ const EXPECTED_PLAN_LINE_ITEM = {
   periodStart: new Date('2026-01-01T00:00:00Z'),
   periodEnd: new Date('2026-02-01T00:00:00Z'),
   proration: false,
+  amountRefunded: 0,
 };
 
 const EXPECTED_PRORATED_CREDIT_LINE_ITEM = {
@@ -75,6 +76,7 @@ const EXPECTED_PRORATED_CREDIT_LINE_ITEM = {
   periodStart: null,
   periodEnd: null,
   proration: true,
+  amountRefunded: 0,
 };
 
 describe('RecurlyInvoicesResource', () => {
@@ -83,6 +85,7 @@ describe('RecurlyInvoicesResource', () => {
 
   beforeEach(() => {
     client = createRecurlyClientMock();
+    client.listRelatedInvoices.mockReturnValue(createRecurlyPager([]));
     invoices = new RecurlyInvoicesResource(asRecurlyClient(client));
   });
 
@@ -871,6 +874,7 @@ describe('RecurlyInvoicesResource', () => {
       periodStart: new Date('2026-02-01T00:00:00Z'),
       periodEnd: null,
       proration: false,
+      amountRefunded: 0,
     });
 
     it('should estimate the next renewal from the subscription without a change', async () => {
@@ -1037,6 +1041,243 @@ describe('RecurlyInvoicesResource', () => {
         constructor: NotFoundError,
         provider: CashierProvider.Recurly,
       });
+    });
+  });
+
+  describe('refundLineItems', () => {
+    const PAID_INVOICE = {
+      ...RECURLY_FIXTURES.INVOICES[0],
+      paid: 164,
+      refundableAmount: 164,
+      lineItems: [
+        { ...PLAN_LINE_ITEM, id: 'li_plan', amount: 119 },
+        { ...PLAN_LINE_ITEM, id: 'li_addon_1', amount: 25, planId: null },
+        { ...PLAN_LINE_ITEM, id: 'li_addon_2', amount: 20, planId: null },
+      ],
+      hasMoreLineItems: false,
+    } as recurly.Invoice;
+
+    const CREDIT_INVOICE = {
+      id: 'rec_credit_1',
+      type: 'credit',
+      currency: 'usd',
+      total: -25,
+      createdAt: new Date('2026-01-02T00:00:00Z'),
+      transactions: [
+        {
+          id: 'rec_txn_refund',
+          type: 'refund',
+          status: 'success',
+          amount: 25,
+          currency: 'usd',
+          originalTransactionId: 'rec_txn_1',
+          createdAt: new Date('2026-01-02T00:00:00Z'),
+        },
+        { id: 'rec_txn_other', type: 'purchase' },
+      ],
+    } as recurly.Invoice;
+
+    const createCreditInvoice = (
+      id: string,
+      lineItems: Partial<recurly.LineItem>[],
+      overrides: Partial<recurly.Invoice> = {},
+    ) =>
+      ({
+        id,
+        type: 'credit',
+        state: 'paid',
+        currency: 'usd',
+        lineItems,
+        hasMoreLineItems: false,
+        ...overrides,
+      }) as recurly.Invoice;
+
+    beforeEach(() => {
+      client.getInvoice.mockResolvedValue(PAID_INVOICE);
+      client.refundInvoice.mockResolvedValue(CREDIT_INVOICE);
+    });
+
+    it('should refund the chosen line in major units back to the payment', async () => {
+      const refund = await invoices.refundLineItems(
+        RECURLY_FIXTURES.INVOICE_ID,
+        { lineItems: [{ lineItemId: 'li_addon_1' }] },
+      );
+
+      expect(client.refundInvoice).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.INVOICE_ID,
+        {
+          type: 'line_items',
+          refundMethod: 'transaction_first',
+          lineItems: [{ id: 'li_addon_1', amount: 25 }],
+        },
+      );
+      expect(refund).toEqual({
+        id: 'rec_credit_1',
+        invoiceId: RECURLY_FIXTURES.INVOICE_ID,
+        amount: 2500,
+        currency: 'USD',
+        lineItems: [{ lineItemId: 'li_addon_1', amount: 2500 }],
+        refunds: [
+          {
+            id: 'rec_txn_refund',
+            paymentId: 'rec_txn_1',
+            status: 'succeeded',
+            amount: 2500,
+            currency: 'USD',
+            reason: null,
+            createdAt: new Date('2026-01-02T00:00:00Z'),
+            provider: CashierProvider.Recurly,
+          },
+        ],
+        createdAt: new Date('2026-01-02T00:00:00Z'),
+        provider: CashierProvider.Recurly,
+      });
+    });
+
+    it('should refund several lines with the given amounts in one request', async () => {
+      await invoices.refundLineItems(RECURLY_FIXTURES.INVOICE_ID, {
+        lineItems: [
+          { lineItemId: 'li_addon_1', amount: 1000 },
+          { lineItemId: 'li_addon_2' },
+        ],
+      });
+
+      expect(client.refundInvoice).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.INVOICE_ID,
+        expect.objectContaining({
+          lineItems: [
+            { id: 'li_addon_1', amount: 10 },
+            { id: 'li_addon_2', amount: 20 },
+          ],
+        }),
+      );
+    });
+
+    it('should pass the idempotency key as a request header', async () => {
+      await invoices.refundLineItems(RECURLY_FIXTURES.INVOICE_ID, {
+        lineItems: [{ lineItemId: 'li_addon_1' }],
+        idempotencyKey: 'refund-42',
+      });
+
+      expect(client.refundInvoice).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.INVOICE_ID,
+        expect.any(Object),
+        { headers: { 'Idempotency-Key': 'refund-42' } },
+      );
+    });
+
+    it('should refund only what earlier credit invoices left on the line', async () => {
+      client.getInvoice.mockResolvedValue({
+        ...PAID_INVOICE,
+        refundableAmount: 149,
+      });
+      client.listRelatedInvoices.mockReturnValue(
+        createRecurlyPager([
+          createCreditInvoice('rec_credit_old', [
+            { amount: -10, previousLineItemId: 'li_addon_1' },
+            { amount: -5, previousLineItemId: null },
+          ]),
+          createCreditInvoice(
+            'rec_credit_void',
+            [{ amount: -10, previousLineItemId: 'li_addon_1' }],
+            { state: 'voided' },
+          ),
+          { ...PAID_INVOICE, id: 'rec_charge_2' },
+        ]),
+      );
+
+      await invoices.refundLineItems(RECURLY_FIXTURES.INVOICE_ID, {
+        lineItems: [{ lineItemId: 'li_addon_1' }],
+      });
+
+      expect(client.listRelatedInvoices).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.INVOICE_ID,
+        { params: { limit: 200 } },
+      );
+      expect(client.refundInvoice).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.INVOICE_ID,
+        expect.objectContaining({
+          lineItems: [{ id: 'li_addon_1', amount: 15 }],
+        }),
+      );
+    });
+
+    it('should reject no line items without calling Recurly', async () => {
+      await expect(
+        invoices.refundLineItems(RECURLY_FIXTURES.INVOICE_ID, {
+          lineItems: [],
+        }),
+      ).rejects.toThrow(ValidationError);
+
+      expect(client.getInvoice).not.toHaveBeenCalled();
+    });
+
+    it('should reject more than is left on the line without refunding', async () => {
+      await expect(
+        invoices.refundLineItems(RECURLY_FIXTURES.INVOICE_ID, {
+          lineItems: [{ lineItemId: 'li_addon_1', amount: 2501 }],
+        }),
+      ).rejects.toThrow(ValidationError);
+
+      expect(client.refundInvoice).not.toHaveBeenCalled();
+    });
+
+    it('should reject an invoice that is not paid without refunding', async () => {
+      client.getInvoice.mockResolvedValue({
+        ...PAID_INVOICE,
+        state: 'past_due',
+      });
+
+      await expect(
+        invoices.refundLineItems(RECURLY_FIXTURES.INVOICE_ID, {
+          lineItems: [{ lineItemId: 'li_addon_1' }],
+        }),
+      ).rejects.toThrow(ValidationError);
+
+      expect(client.refundInvoice).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('get with line item refunds', () => {
+    it('should add what credit invoices refunded to each line in minor units', async () => {
+      client.getInvoice.mockResolvedValue({
+        ...RECURLY_FIXTURES.INVOICES[0],
+        lineItems: [PLAN_LINE_ITEM],
+        hasMoreLineItems: false,
+      });
+      client.listRelatedInvoices.mockReturnValue(
+        createRecurlyPager([
+          {
+            id: 'rec_credit_1',
+            type: 'credit',
+            state: 'paid',
+            currency: 'usd',
+            lineItems: [{ amount: -49.99, previousLineItemId: 'li_1' }],
+            hasMoreLineItems: false,
+          },
+        ]),
+      );
+
+      const invoice = await invoices.get(RECURLY_FIXTURES.INVOICE_ID, {
+        with: ['lineItems'],
+      });
+
+      expect(invoice.lineItems).toEqual([
+        { ...EXPECTED_PLAN_LINE_ITEM, amountRefunded: 4999 },
+      ]);
+    });
+
+    it('should not list related invoices when nothing was refunded', async () => {
+      client.getInvoice.mockResolvedValue({
+        ...RECURLY_FIXTURES.INVOICES[0],
+        refundableAmount: 149.99,
+        lineItems: [PLAN_LINE_ITEM],
+        hasMoreLineItems: false,
+      });
+
+      await invoices.get(RECURLY_FIXTURES.INVOICE_ID, { with: ['lineItems'] });
+
+      expect(client.listRelatedInvoices).not.toHaveBeenCalled();
     });
   });
 });

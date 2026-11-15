@@ -1,6 +1,6 @@
 # Invoices
 
-`driver.invoices` creates, reads, pays and voids invoices.
+`driver.invoices` creates, reads, pays, voids and refunds invoices.
 
 - [`invoices.get(invoiceId, params?)`](#invoicesgetinvoiceid-params)
 - [`invoices.list(params)`](#invoiceslistparams)
@@ -11,6 +11,7 @@
 - [`invoices.void(invoiceId)`](#invoicesvoidinvoiceid)
 - [`invoices.preview(params)`](#invoicespreviewparams)
 - [`invoices.sendReceipt(invoiceId, params?)`](#invoicessendreceiptinvoiceid-params)
+- [`invoices.refundLineItems(invoiceId, params)`](#invoicesrefundlineitemsinvoiceid-params)
 - [The `Invoice` object](#the-invoice-object)
 
 ## `invoices.get(invoiceId, params?)`
@@ -101,13 +102,13 @@ It returns a `CursorPaginator<Invoice>`. See [Pagination and limits](drivers.md#
 
 `get`, `list` and `cursorPaginate` take `with`, like [payments](payments.md#loading-relations-with-with). The relations each provider supports are typed in `CashierInvoiceRelations`.
 
-| Relation          | Adds              | Stripe                                                                      | Recurly                                                                |
-| ----------------- | ----------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `refunds`         | `amountRefunded`  | Expands `charge`                                                            | No extra cost                                                          |
-| `lineItems`       | `lineItems`       | No extra cost for up to 10 lines. One more request per 100 lines after that | No extra cost, unless Recurly reports more line items than it returned |
-| `payments`        | `payments`        | Expands `payment_intent`                                                    | No extra cost                                                          |
-| `startingBalance` | `startingBalance` | No extra cost                                                               | Not available                                                          |
-| `timeline`        | `timeline`        | No extra cost                                                               | No extra cost                                                          |
+| Relation          | Adds              | Stripe                                                                                                                                                           | Recurly                                                                                                                                                    |
+| ----------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `refunds`         | `amountRefunded`  | Expands `charge`                                                                                                                                                 | No extra cost                                                                                                                                              |
+| `lineItems`       | `lineItems`       | No extra cost for up to 10 lines. One more request per 100 lines after that. When the invoice has post-payment credit notes, lists them to fill `amountRefunded` | No extra cost, unless Recurly reports more line items than it returned. When the invoice was refunded, lists its related invoices to fill `amountRefunded` |
+| `payments`        | `payments`        | Expands `payment_intent`                                                                                                                                         | No extra cost                                                                                                                                              |
+| `startingBalance` | `startingBalance` | No extra cost                                                                                                                                                    | Not available                                                                                                                                              |
+| `timeline`        | `timeline`        | No extra cost                                                                                                                                                    | No extra cost                                                                                                                                              |
 
 | Driver                                              | Accepted relations                                                                    |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------- |
@@ -127,18 +128,19 @@ Amounts are in minor units. `timeline` is oldest first. Each `InvoiceEvent` has 
 
 ### The `InvoiceLineItem` object
 
-| Field            | Type             | Description                                                                   |
-| ---------------- | ---------------- | ----------------------------------------------------------------------------- |
-| `id`             | `string`         | The provider's line item id.                                                  |
-| `description`    | `string \| null` | What the line is for.                                                         |
-| `amount`         | `number`         | In minor units. Negative for credits, such as the unused time of a proration. |
-| `quantity`       | `number \| null` | The quantity.                                                                 |
-| `unitAmount`     | `number \| null` | The price per unit, in minor units.                                           |
-| `priceId`        | `string \| null` | The Stripe price id or the Recurly plan id.                                   |
-| `subscriptionId` | `string \| null` | The subscription the line bills.                                              |
-| `periodStart`    | `Date \| null`   | Start of the period the line covers.                                          |
-| `periodEnd`      | `Date \| null`   | End of the period the line covers.                                            |
-| `proration`      | `boolean`        | `true` for a proration. On Recurly, a line whose `proration_rate` is not 1.   |
+| Field            | Type             | Description                                                                                                                                                                                                                                                                                   |
+| ---------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`             | `string`         | The provider's line item id.                                                                                                                                                                                                                                                                  |
+| `description`    | `string \| null` | What the line is for.                                                                                                                                                                                                                                                                         |
+| `amount`         | `number`         | In minor units. Negative for credits, such as the unused time of a proration.                                                                                                                                                                                                                 |
+| `quantity`       | `number \| null` | The quantity.                                                                                                                                                                                                                                                                                 |
+| `unitAmount`     | `number \| null` | The price per unit, in minor units.                                                                                                                                                                                                                                                           |
+| `priceId`        | `string \| null` | The Stripe price id or the Recurly plan id.                                                                                                                                                                                                                                                   |
+| `subscriptionId` | `string \| null` | The subscription the line bills.                                                                                                                                                                                                                                                              |
+| `periodStart`    | `Date \| null`   | Start of the period the line covers.                                                                                                                                                                                                                                                          |
+| `periodEnd`      | `Date \| null`   | End of the period the line covers.                                                                                                                                                                                                                                                            |
+| `proration`      | `boolean`        | `true` for a proration. On Recurly, a line whose `proration_rate` is not 1.                                                                                                                                                                                                                   |
+| `amountRefunded` | `number`         | What has been refunded from the line, in minor units. `0` on a preview. On Stripe, the amounts of the line on post-payment credit notes that are not void. On Recurly, the amounts of credit invoice lines whose `previous_line_item_id` is the line, on credit invoices that are not voided. |
 
 ## `invoices.create(params)`
 
@@ -293,6 +295,49 @@ await cashier.use(CashierProvider.Stripe).invoices.sendReceipt('in_123');
 | Recurly  | Not available. Recurly's API cannot send a receipt, so `sendReceipt` does not compile on the Recurly driver. See [Provider-only methods](typescript.md#provider-only-methods). |
 
 An invoice that is not paid, or that has no email to send to, rejects with `ValidationError`.
+
+## `invoices.refundLineItems(invoiceId, params)`
+
+Refunds chosen lines of a paid invoice back to the payment, in full or in part, in one refund, and returns it. Use it to refund one product of an invoice that charged several, such as a one-off item billed with the first payment of a subscription.
+
+```ts
+import { RefundReason } from '@aios-inc/cashier';
+
+const refund = await driver.invoices.refundLineItems('in_123', {
+  lineItems: [{ lineItemId: 'il_123' }, { lineItemId: 'il_456', amount: 1000 }],
+  reason: RefundReason.RequestedByCustomer,
+  idempotencyKey: 'refund-order-42',
+});
+```
+
+Read the line ids from the [`lineItems` relation](#loading-relations-with-with). Each line's `amountRefunded` says what is left to refund.
+
+| Parameter        | Type                      | Description                                                                                                                                |
+| ---------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `lineItems`      | `RefundInvoiceLineItem[]` | Required. The lines to refund, each at most once. `lineItemId` is the line's id. `amount`, in minor units, defaults to what is left on it. |
+| `reason`         | `RefundReason`            | Why. Stripe keeps `Duplicate` and `Fraudulent` on the credit note. Recurly has no refund reason.                                           |
+| `metadata`       | `Record<string, string>`  | Stripe only: set on the credit note.                                                                                                       |
+| `idempotencyKey` | `string`                  | Makes retrying the refund safe.                                                                                                            |
+
+| Provider | Behavior                                                                                                                                                                                                                                                                          |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stripe   | Previews a credit note for the lines, then creates it with `refund_amount` set to the previewed total, so Stripe refunds the charge and records which lines were credited. The line amounts are before discounts and tax, as on the invoice. The refunded `amount` is after them. |
+| Recurly  | Refunds the invoice with `type: 'line_items'`, each line by `amount`, and `refund_method: 'transaction_first'`, so the money goes back to the payment before any account credit. Returns the credit invoice that Recurly creates.                                                 |
+
+An invoice that is not paid, a line that is not on the invoice, and an amount above what is left on a line reject with `ValidationError` before anything is refunded.
+
+### The `InvoiceRefund` object
+
+| Field       | Type                      | Description                                                                           |
+| ----------- | ------------------------- | ------------------------------------------------------------------------------------- |
+| `id`        | `string`                  | The Stripe credit note id, or the Recurly credit invoice id.                          |
+| `invoiceId` | `string`                  | The refunded invoice.                                                                 |
+| `amount`    | `number`                  | The total refunded, in minor units.                                                   |
+| `currency`  | `string`                  | Uppercase ISO 4217 code.                                                              |
+| `lineItems` | `InvoiceLineItemRefund[]` | Each refunded line, with its `lineItemId` and the `amount` taken from it.             |
+| `refunds`   | `Refund[]`                | The refunds of the payment, as in [`payments.refund`](payments.md#the-refund-object). |
+| `createdAt` | `Date`                    | When it was made.                                                                     |
+| `provider`  | `CashierProvider`         | The provider it came from.                                                            |
 
 ## The `Invoice` object
 

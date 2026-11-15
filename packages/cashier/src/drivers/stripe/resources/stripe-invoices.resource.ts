@@ -13,20 +13,29 @@ import {
   PayInvoiceParams,
   PreviewInvoiceParams,
   ProviderInvoiceRelation,
+  InvoiceRefund,
+  RefundInvoiceLineItemsParams,
 } from '../../../types/invoice.types';
 import { CursorPaginator } from '../../../types/pagination.types';
 import { SendReceiptParams } from '../../../types/payment.types';
 import {
   DEFAULT_DAYS_UNTIL_DUE,
   DEFAULT_LIST_LIMIT,
+  STRIPE_CREDIT_NOTE_REASONS,
   STRIPE_INVOICE_RELATION_EXPAND,
   STRIPE_PRORATION_BEHAVIORS,
 } from '../../../constants/cashier.constants';
 import { ValidationError } from '../../../errors/validation.error';
 import { validateCreateInvoiceParams } from '../../../utils/create-params.utils';
+import {
+  resolveRefundLineItems,
+  validateRefundLineItemsParams,
+} from '../../../utils/refund-line-items.utils';
 import { resolveRelations } from '../../../utils/relations.utils';
 import {
+  mapStripeCreditNote,
   mapStripeInvoice,
+  mapStripeInvoiceLineItem,
   mapStripeInvoicePreview,
 } from '../mappers/stripe-invoice.mapper';
 import {
@@ -144,10 +153,7 @@ export class StripeInvoicesResource implements InvoicesResource<CashierProvider.
         toStripeExpand(relations, STRIPE_INVOICE_RELATION_EXPAND),
       );
 
-      return mapStripeInvoice(
-        await this.withLineItems(invoice, relations),
-        relations,
-      ) as InvoiceWith<Relation>;
+      return this.toInvoice<Relation>(invoice, relations);
     });
   }
 
@@ -323,11 +329,127 @@ export class StripeInvoicesResource implements InvoicesResource<CashierProvider.
     });
   }
 
-  private async withLineItems(
+  refundLineItems(
+    invoiceId: string,
+    params: RefundInvoiceLineItemsParams,
+  ): Promise<InvoiceRefund> {
+    return stripeRequest(async () => {
+      validateRefundLineItemsParams(params, CashierProvider.Stripe);
+
+      const invoice = await this.withLineItems(
+        await this.client.invoices.retrieve(invoiceId),
+      );
+
+      if (invoice.status !== 'paid') {
+        throw new ValidationError(
+          `Only a paid invoice can be refunded, and invoice ${invoiceId} is ${invoice.status}`,
+          { provider: CashierProvider.Stripe },
+        );
+      }
+
+      const amountsRefunded = await this.amountsRefundedByLineItem(invoice);
+      const lineItems = resolveRefundLineItems(
+        invoiceId,
+        invoice.lines.data.map((lineItem) =>
+          mapStripeInvoiceLineItem(lineItem, amountsRefunded.get(lineItem.id)),
+        ),
+        params,
+        CashierProvider.Stripe,
+      );
+      const lines = lineItems.map(
+        ({ lineItemId, amount }): Stripe.CreditNoteCreateParams.Line => ({
+          type: 'invoice_line_item',
+          invoice_line_item: lineItemId,
+          amount,
+        }),
+      );
+      const preview = await this.client.creditNotes.preview({
+        invoice: invoiceId,
+        lines,
+      });
+      const reason = params.reason && STRIPE_CREDIT_NOTE_REASONS[params.reason];
+      const creditNote = await this.client.creditNotes.create(
+        {
+          invoice: invoiceId,
+          lines,
+          refund_amount: preview.amount,
+          ...(reason ? { reason } : {}),
+          ...(params.metadata ? { metadata: params.metadata } : {}),
+          expand: ['refund'],
+        },
+        ...toStripeRequestOptions(params.idempotencyKey),
+      );
+
+      return mapStripeCreditNote(creditNote, lineItems);
+    });
+  }
+
+  private async toInvoice<Relation extends StripeInvoiceRelation>(
     invoice: Stripe.Invoice,
     relations: ReadonlySet<StripeInvoiceRelation>,
+  ): Promise<InvoiceWith<Relation>> {
+    if (!relations.has('lineItems')) {
+      return mapStripeInvoice(invoice, relations) as InvoiceWith<Relation>;
+    }
+
+    const withLineItems = await this.withLineItems(invoice);
+
+    return mapStripeInvoice(
+      withLineItems,
+      relations,
+      await this.amountsRefundedByLineItem(withLineItems),
+    ) as InvoiceWith<Relation>;
+  }
+
+  private async amountsRefundedByLineItem(
+    invoice: Stripe.Invoice,
+  ): Promise<Map<string, number>> {
+    const amounts = new Map<string, number>();
+
+    if (!invoice.post_payment_credit_notes_amount) return amounts;
+
+    const listCreditNotes = (startingAfter?: string) =>
+      this.client.creditNotes.list({
+        invoice: invoice.id,
+        limit: STRIPE_LINE_ITEMS_PAGE_SIZE,
+        ...(startingAfter ? { starting_after: startingAfter } : {}),
+      });
+    const creditNotes = await readAllStripeItems(
+      await listCreditNotes(),
+      listCreditNotes,
+    );
+    const creditNoteLines = await Promise.all(
+      creditNotes
+        .filter(
+          (creditNote) =>
+            creditNote.type === 'post_payment' && creditNote.status !== 'void',
+        )
+        .map((creditNote) =>
+          readAllStripeItems(creditNote.lines, (startingAfter) =>
+            this.client.creditNotes.listLineItems(creditNote.id, {
+              limit: STRIPE_LINE_ITEMS_PAGE_SIZE,
+              starting_after: startingAfter,
+            }),
+          ),
+        ),
+    );
+
+    for (const line of creditNoteLines.flat()) {
+      if (!line.invoice_line_item) continue;
+
+      amounts.set(
+        line.invoice_line_item,
+        (amounts.get(line.invoice_line_item) ?? 0) + line.amount,
+      );
+    }
+
+    return amounts;
+  }
+
+  private async withLineItems(
+    invoice: Stripe.Invoice,
   ): Promise<Stripe.Invoice> {
-    if (!relations.has('lineItems') || !invoice.lines?.has_more) {
+    if (!invoice.lines?.has_more) {
       return invoice;
     }
 
@@ -353,14 +475,15 @@ export class StripeInvoicesResource implements InvoicesResource<CashierProvider.
         ...toStripeExpand(relations, STRIPE_INVOICE_RELATION_EXPAND, 'data.'),
       });
       const invoices = await Promise.all(
-        response.data.map((invoice) => this.withLineItems(invoice, relations)),
+        response.data.map((invoice) =>
+          this.toInvoice<Relation>(invoice, relations),
+        ),
       );
 
       return toStripeCursorPaginator(
         { ...response, data: invoices },
         perPage,
-        (invoice) =>
-          mapStripeInvoice(invoice, relations) as InvoiceWith<Relation>,
+        (invoice) => invoice,
       );
     });
   }

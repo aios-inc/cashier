@@ -5,7 +5,9 @@ import {
   InvoiceEvent,
   InvoiceEventType,
   InvoiceLineItem,
+  InvoiceLineItemRefund,
   InvoicePreview,
+  InvoiceRefund,
   InvoiceRelation,
   InvoiceStatus,
   InvoiceWith,
@@ -13,6 +15,7 @@ import {
 import { RECURLY_PAYMENT_TRANSACTION_TYPES } from '../../../constants/cashier.constants';
 import { toMinorUnits } from '../../../utils/money.utils';
 import { mapRecurlyPayment } from './recurly-payment.mapper';
+import { mapRecurlyRefundTransaction } from './recurly-refund.mapper';
 
 const RECURLY_INVOICE_STATUSES: Record<string, InvoiceStatus> = {
   pending: 'open',
@@ -60,6 +63,7 @@ const toMinorOrNull = (
 export const mapRecurlyInvoiceLineItem = (
   lineItem: recurly.LineItem,
   invoiceCurrency: string,
+  amountRefunded = 0,
 ): InvoiceLineItem => {
   const currency = (lineItem.currency ?? invoiceCurrency).toUpperCase();
 
@@ -74,6 +78,7 @@ export const mapRecurlyInvoiceLineItem = (
     periodStart: lineItem.startDate ?? null,
     periodEnd: lineItem.endDate ?? null,
     proration: (lineItem.prorationRate ?? 1) !== 1,
+    amountRefunded,
   };
 };
 
@@ -95,6 +100,7 @@ const mapRecurlyInvoiceTimeline = (
 export const mapRecurlyInvoice = (
   invoice: recurly.Invoice,
   relations: ReadonlySet<InvoiceRelation> = new Set(),
+  amountsRefundedByLineItem: ReadonlyMap<string, number> = new Map(),
 ): Invoice & Partial<InvoiceWith<InvoiceRelation>> => {
   const currency = (invoice.currency ?? '').toUpperCase();
 
@@ -123,7 +129,11 @@ export const mapRecurlyInvoice = (
     ...(relations.has('lineItems')
       ? {
           lineItems: (invoice.lineItems ?? []).map((lineItem) =>
-            mapRecurlyInvoiceLineItem(lineItem, currency),
+            mapRecurlyInvoiceLineItem(
+              lineItem,
+              currency,
+              amountsRefundedByLineItem.get(lineItem.id ?? ''),
+            ),
           ),
         }
       : {}),
@@ -192,6 +202,7 @@ export const mapRecurlySubscriptionPreview = (
     periodStart,
     periodEnd: null,
     proration: false,
+    amountRefunded: 0,
   });
   const lineItems = [
     toLineItem(
@@ -233,6 +244,32 @@ export const mapRecurlySubscriptionPreview = (
     amountDue: total,
     lineItems,
     nextPaymentAt: subscription.currentPeriodEndsAt ?? null,
+    provider: CashierProvider.Recurly,
+  };
+};
+
+export const mapRecurlyCreditInvoice = (
+  creditInvoice: recurly.Invoice,
+  invoiceId: string,
+  lineItems: InvoiceLineItemRefund[],
+): InvoiceRefund => {
+  const currency = (creditInvoice.currency ?? '').toUpperCase();
+
+  return {
+    id: creditInvoice.id ?? '',
+    invoiceId,
+    amount: toMinorUnits(Math.abs(creditInvoice.total ?? 0), currency),
+    currency,
+    lineItems,
+    refunds: (creditInvoice.transactions ?? [])
+      .filter((transaction) => transaction.type === 'refund')
+      .map((transaction) =>
+        mapRecurlyRefundTransaction(
+          transaction,
+          transaction.originalTransactionId ?? '',
+        ),
+      ),
+    createdAt: creditInvoice.createdAt ?? new Date(0),
     provider: CashierProvider.Recurly,
   };
 };
