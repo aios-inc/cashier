@@ -1204,7 +1204,7 @@ describe('RecurlyInvoicesResource', () => {
         }),
       ).rejects.toThrow(
         new ValidationError(
-          `Invoice ${RECURLY_FIXTURES.INVOICE_ID} has 3000 left to refund on its payment`,
+          `Invoice ${RECURLY_FIXTURES.INVOICE_ID} has $30.00 left to refund on its payment`,
           { provider: CashierProvider.Recurly },
         ),
       );

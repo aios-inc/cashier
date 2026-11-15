@@ -396,14 +396,16 @@ export class StripeInvoicesResource implements InvoicesResource<CashierProvider.
       }
 
       const amountsRefunded = sumCreditedByLineItem(creditNotes);
-      const lineItems = resolveRefundLineItems(
+      const currency = invoice.currency.toUpperCase();
+      const lineItems = resolveRefundLineItems({
         invoiceId,
-        invoice.lines.data.map((lineItem) =>
+        currency,
+        invoiceLineItems: invoice.lines.data.map((lineItem) =>
           mapStripeInvoiceLineItem(lineItem, amountsRefunded.get(lineItem.id)),
         ),
         params,
-        CashierProvider.Stripe,
-      );
+        provider: CashierProvider.Stripe,
+      });
       const lines = lineItems.map(
         ({ lineItemId, amount }): Stripe.CreditNoteCreateParams.Line => ({
           type: 'invoice_line_item',
@@ -417,12 +419,15 @@ export class StripeInvoicesResource implements InvoicesResource<CashierProvider.
       });
       const charge = getExpanded(invoice.charge);
 
-      assertPaymentCoversRefund(
+      assertPaymentCoversRefund({
         invoiceId,
-        preview.amount,
-        charge ? charge.amount - charge.amount_refunded : invoice.amount_paid,
-        CashierProvider.Stripe,
-      );
+        currency,
+        refundAmount: preview.amount,
+        paymentRemaining: charge
+          ? charge.amount - charge.amount_refunded
+          : invoice.amount_paid,
+        provider: CashierProvider.Stripe,
+      });
 
       const reason = params.reason && STRIPE_CREDIT_NOTE_REASONS[params.reason];
       const metadata = {
