@@ -12,7 +12,10 @@ import {
   InvoiceStatus,
   InvoiceWith,
 } from '../../../types/invoice.types';
-import { RECURLY_PAYMENT_TRANSACTION_TYPES } from '../../../constants/cashier.constants';
+import {
+  RECURLY_PAYMENT_TRANSACTION_TYPES,
+  RECURLY_RECURRING_LINE_ITEM_ORIGINS,
+} from '../../../constants/cashier.constants';
 import { toMinorUnits } from '../../../utils/money.utils';
 import { mapRecurlyPayment } from './recurly-payment.mapper';
 import { mapRecurlyRefundTransaction } from './recurly-refund.mapper';
@@ -78,6 +81,7 @@ export const mapRecurlyInvoiceLineItem = (
     periodStart: lineItem.startDate ?? null,
     periodEnd: lineItem.endDate ?? null,
     proration: (lineItem.prorationRate ?? 1) !== 1,
+    recurring: RECURLY_RECURRING_LINE_ITEM_ORIGINS.has(lineItem.origin ?? ''),
     amountRefunded,
   };
 };
@@ -202,6 +206,7 @@ export const mapRecurlySubscriptionPreview = (
     periodStart,
     periodEnd: null,
     proration: false,
+    recurring: true,
     amountRefunded: 0,
   });
   const lineItems = [

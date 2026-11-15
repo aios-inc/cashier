@@ -24,6 +24,7 @@ const createLine = (id: string, overrides: Record<string, unknown> = {}) => ({
   subscription: 'sub_123',
   period: { start: 1767225600, end: 1769904000 },
   proration: false,
+  type: 'subscription',
   ...overrides,
 });
 
@@ -38,6 +39,7 @@ const expectedLine = (id: string, overrides: Record<string, unknown> = {}) => ({
   periodStart: new Date(1767225600 * 1000),
   periodEnd: new Date(1769904000 * 1000),
   proration: false,
+  recurring: true,
   amountRefunded: 0,
   ...overrides,
 });
@@ -1356,6 +1358,30 @@ describe('StripeInvoicesResource', () => {
       await invoices.get(STRIPE_FIXTURES.INVOICE_ID, { with: ['lineItems'] });
 
       expect(client.creditNotes.list).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('get with one-off line items', () => {
+    it('should mark subscription lines as recurring and invoice items as one-off', async () => {
+      client.invoices.retrieve.mockResolvedValue({
+        ...STRIPE_FIXTURES.SUBSCRIPTION_INVOICE,
+        lines: {
+          data: [
+            createLine('il_plan'),
+            createLine('il_addon', { type: 'invoiceitem', amount: 2500 }),
+          ],
+          has_more: false,
+        },
+      });
+
+      const invoice = await invoices.get(STRIPE_FIXTURES.INVOICE_ID, {
+        with: ['lineItems'],
+      });
+
+      expect(invoice.lineItems).toEqual([
+        expectedLine('il_plan'),
+        expectedLine('il_addon', { amount: 2500, recurring: false }),
+      ]);
     });
   });
 });
