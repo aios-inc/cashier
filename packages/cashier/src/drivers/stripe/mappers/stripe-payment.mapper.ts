@@ -6,6 +6,7 @@ import {
   PaymentDisputeStatus,
   PaymentEvent,
   PaymentEventType,
+  PaymentNextAction,
   PaymentRelation,
   PaymentRelationFields,
   PaymentStatus,
@@ -66,6 +67,13 @@ const mapStripePaymentStatus = (
 
   return STRIPE_PAYMENT_STATUSES[paymentIntent.status] ?? 'unknown';
 };
+
+const mapStripeNextAction = (
+  paymentIntent: Stripe.PaymentIntent,
+): PaymentNextAction | null =>
+  paymentIntent.status === 'requires_action' && paymentIntent.client_secret
+    ? { type: 'authenticate', clientSecret: paymentIntent.client_secret }
+    : null;
 
 const mapStripeDispute = (
   dispute: string | Stripe.Dispute | null | undefined,
@@ -177,6 +185,8 @@ export const mapStripePayment = (
     amount: paymentIntent.amount,
     currency: paymentIntent.currency.toUpperCase(),
     description: paymentIntent.description,
+    metadata: paymentIntent.metadata ?? {},
+    nextAction: mapStripeNextAction(paymentIntent),
     createdAt: new Date(paymentIntent.created * 1000),
     provider: CashierProvider.Stripe,
     ...(relations.has('refunds')

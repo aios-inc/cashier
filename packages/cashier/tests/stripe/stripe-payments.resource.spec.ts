@@ -442,6 +442,47 @@ describe('StripePaymentsResource', () => {
       expect(payment.status).toBe('incomplete');
     });
 
+    it('should confirm on-session for the Stripe SDK instead of off-session when the customer is present', async () => {
+      await payments.create({ ...PARAMS, onSession: true });
+
+      expect(client.paymentIntents.create).toHaveBeenCalledWith({
+        amount: 12900,
+        currency: 'eur',
+        customer: STRIPE_FIXTURES.CUSTOMER_ID,
+        payment_method: STRIPE_FIXTURES.PAYMENT_METHOD_ID,
+        payment_method_types: ['card', 'link'],
+        confirm: true,
+        use_stripe_sdk: true,
+        description: 'Wegovy 0.5mg',
+        metadata: { order: 'order-42' },
+      });
+    });
+
+    it('should return the client secret to authenticate a payment that requires action', async () => {
+      client.paymentIntents.create.mockResolvedValue(
+        STRIPE_FIXTURES.PAYMENT_INTENTS[2],
+      );
+
+      const payment = await payments.create({ ...PARAMS, onSession: true });
+
+      expect(payment.status).toBe('incomplete');
+      expect(payment.nextAction).toEqual({
+        type: 'authenticate',
+        clientSecret: 'pi_789_secret_abc',
+      });
+    });
+
+    it('should not return the client secret of a payment that needs no action', async () => {
+      client.paymentIntents.create.mockResolvedValue({
+        ...STRIPE_FIXTURES.SUCCEEDED_PAYMENT_INTENT,
+        client_secret: 'pi_123_secret_abc',
+      });
+
+      const payment = await payments.create({ ...PARAMS, onSession: true });
+
+      expect(payment.nextAction).toBeNull();
+    });
+
     it('should throw PaymentFailedError when the card is declined', async () => {
       client.paymentIntents.create.mockRejectedValue(
         new Stripe.errors.StripeCardError({
@@ -484,6 +525,24 @@ describe('StripePaymentsResource', () => {
         payment_intent: STRIPE_FIXTURES.PAYMENT_ID,
       });
       expect(refund).toEqual(STRIPE_FIXTURES.EXPECTED_REFUND);
+    });
+
+    it('should pass the idempotency key as is', async () => {
+      await payments.refund(STRIPE_FIXTURES.PAYMENT_ID, {
+        amount: 5000,
+        idempotencyKey: 'refund-42',
+      });
+
+      expect(client.refunds.create).toHaveBeenCalledWith(
+        { payment_intent: STRIPE_FIXTURES.PAYMENT_ID, amount: 5000 },
+        { idempotencyKey: 'refund-42' },
+      );
+    });
+
+    it('should map the metadata stored on the refund', async () => {
+      const refund = await refundWith({ metadata: { order: 'order-42' } });
+
+      expect(refund.metadata).toEqual({ order: 'order-42' });
     });
 
     it('should refund part of the payment intent with the amount in minor units', async () => {

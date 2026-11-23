@@ -42,6 +42,7 @@ export interface AdjustBalanceParams {
   amount: number;
   currency: string;
   description?: string;
+  idempotencyKey?: string;
 }
 
 export interface ListCustomersParams {

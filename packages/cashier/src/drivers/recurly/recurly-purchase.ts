@@ -2,7 +2,7 @@ import * as recurly from 'recurly';
 import { CashierProvider } from '../../types/cashier.types';
 import { ProviderError } from '../../errors/provider.error';
 import { toMajorUnits } from '../../utils/money.utils';
-import { toRecurlyCustomFields } from './mappers/recurly-subscription.mapper';
+import { toRecurlyCustomFields } from './mappers/recurly-custom-fields.mapper';
 
 interface RecurlyPurchaseClient {
   createPurchase(

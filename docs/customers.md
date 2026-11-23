@@ -61,18 +61,19 @@ const transaction = await driver.customers.creditBalance('cus_123', {
 transaction.amount; // -2500
 ```
 
-| Parameter     | Type     | Description                                                    |
-| ------------- | -------- | -------------------------------------------------------------- |
-| `amount`      | `number` | Required. A positive integer in minor units.                   |
-| `currency`    | `string` | Required. ISO 4217 code. Stripe needs the customer's currency. |
-| `description` | `string` | Why the balance changed.                                       |
+| Parameter        | Type     | Description                                                    |
+| ---------------- | -------- | -------------------------------------------------------------- |
+| `amount`         | `number` | Required. A positive integer in minor units.                   |
+| `currency`       | `string` | Required. ISO 4217 code. Stripe needs the customer's currency. |
+| `description`    | `string` | Why the balance changed.                                       |
+| `idempotencyKey` | `string` | Makes a retry with the same key safe.                          |
 
 An `amount` that is not a positive integer, or a missing `currency`, rejects with `ValidationError` before any request.
 
-| Provider | Behavior                                                                                                                               |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Stripe   | Creates a customer balance transaction with a negative `amount`.                                                                       |
-| Recurly  | Creates a pending `credit` line item on the account, with the amount in major units. Recurly applies it to the account's next invoice. |
+| Provider | Behavior                                                                                                                                                                                         |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Stripe   | Creates a customer balance transaction with a negative `amount`. `idempotencyKey` is sent unchanged.                                                                                             |
+| Recurly  | Creates a pending `credit` line item on the account, with the amount in major units. Recurly applies it to the account's next invoice. `idempotencyKey` is sent as the `Idempotency-Key` header. |
 
 ## `customers.debitBalance(customerId, params)`
 
@@ -86,10 +87,12 @@ await driver.customers.debitBalance('cus_123', {
 });
 ```
 
-| Provider | Behavior                                                         |
-| -------- | ---------------------------------------------------------------- |
-| Stripe   | Creates a customer balance transaction with a positive `amount`. |
-| Recurly  | Creates a pending `charge` line item on the account.             |
+| Provider | Behavior                                                                                                       |
+| -------- | -------------------------------------------------------------------------------------------------------------- |
+| Stripe   | Creates a customer balance transaction with a positive `amount`. `idempotencyKey` is sent unchanged.           |
+| Recurly  | Creates a pending `charge` line item on the account. `idempotencyKey` is sent as the `Idempotency-Key` header. |
+
+To bill something with a subscription's next renewal as its own line on the invoice, use [`subscriptions.addCharge`](subscriptions.md#subscriptionsaddchargesubscriptionid-params) instead.
 
 ### The `BalanceTransaction` object
 

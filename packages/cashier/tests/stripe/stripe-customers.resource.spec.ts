@@ -283,6 +283,22 @@ describe('StripeCustomersResource', () => {
       );
     });
 
+    it('should pass the idempotency key as is', async () => {
+      client.customers.createBalanceTransaction.mockResolvedValue(transaction);
+
+      await customers.creditBalance(STRIPE_FIXTURES.CUSTOMER_ID, {
+        amount: 2500,
+        currency: 'USD',
+        idempotencyKey: 'order-42-credit',
+      });
+
+      expect(client.customers.createBalanceTransaction).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.CUSTOMER_ID,
+        { amount: -2500, currency: 'usd' },
+        { idempotencyKey: 'order-42-credit' },
+      );
+    });
+
     it.each([
       ['a zero amount', { amount: 0, currency: 'USD' }],
       ['a fractional amount', { amount: 10.5, currency: 'USD' }],
@@ -326,6 +342,29 @@ describe('StripeCustomersResource', () => {
         currency: 'EUR',
         description: null,
       });
+    });
+
+    it('should pass the idempotency key as is', async () => {
+      client.customers.createBalanceTransaction.mockResolvedValue({
+        id: 'cbtxn_456',
+        customer: STRIPE_FIXTURES.CUSTOMER_ID,
+        amount: 1000,
+        currency: 'eur',
+        description: null,
+        created: 1767225600,
+      });
+
+      await customers.debitBalance(STRIPE_FIXTURES.CUSTOMER_ID, {
+        amount: 1000,
+        currency: 'EUR',
+        idempotencyKey: 'order-42-debit',
+      });
+
+      expect(client.customers.createBalanceTransaction).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.CUSTOMER_ID,
+        { amount: 1000, currency: 'eur' },
+        { idempotencyKey: 'order-42-debit' },
+      );
     });
 
     it('should reject an invalid amount without calling Stripe', async () => {

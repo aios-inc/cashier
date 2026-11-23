@@ -1,8 +1,10 @@
 import * as recurly from 'recurly';
 import { RecurlySubscriptionsResource } from '../../src/drivers/recurly/resources/recurly-subscriptions.resource';
 import { AuthenticationError } from '../../src/errors/authentication.error';
+import { NotFoundError } from '../../src/errors/not-found.error';
 import { PaymentMethodError } from '../../src/errors/payment-method.error';
 import { ProviderError } from '../../src/errors/provider.error';
+import { SubscriptionError } from '../../src/errors/subscription.error';
 import { UnsupportedOperationError } from '../../src/errors/unsupported-operation.error';
 import { ValidationError } from '../../src/errors/validation.error';
 import { CashierProvider } from '../../src/types/cashier.types';
@@ -1241,6 +1243,248 @@ describe('RecurlySubscriptionsResource', () => {
         provider: CashierProvider.Recurly,
       });
       expect(client.updateSubscription).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('addCharge', () => {
+    const PARAMS = {
+      description: 'Needles x10',
+      unitAmount: 1250,
+      metadata: { order: 'order-42' },
+    };
+    const LINE_ITEM = {
+      id: 'li_charge_1',
+      account: { id: RECURLY_FIXTURES.ACCOUNT_ID },
+      subscriptionId: null,
+      type: 'charge',
+      state: 'pending',
+      description: 'Needles x10',
+      unitAmount: 12.5,
+      quantity: 2,
+      subtotal: 25,
+      amount: 25,
+      currency: 'USD',
+      customFields: [{ name: 'order', value: 'order-42' }],
+      createdAt: new Date('2026-01-10T00:00:00Z'),
+    } as recurly.LineItem;
+
+    beforeEach(() => {
+      client.getSubscription.mockResolvedValue(
+        RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+      );
+      client.createLineItem.mockResolvedValue(LINE_ITEM);
+    });
+
+    it("should add a pending charge in major units to the subscription's account and currency", async () => {
+      const charge = await subscriptions.addCharge(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        { ...PARAMS, quantity: 2 },
+      );
+
+      expect(client.getSubscription).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+      );
+      expect(client.createLineItem).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.ACCOUNT_ID,
+        {
+          type: 'charge',
+          currency: 'USD',
+          unitAmount: 12.5,
+          quantity: 2,
+          description: 'Needles x10',
+          customFields: [{ name: 'order', value: 'order-42' }],
+        },
+      );
+      expect(charge).toEqual({
+        id: 'li_charge_1',
+        customerId: RECURLY_FIXTURES.ACCOUNT_ID,
+        subscriptionId: null,
+        description: 'Needles x10',
+        unitAmount: 1250,
+        quantity: 2,
+        amount: 2500,
+        currency: 'USD',
+        metadata: { order: 'order-42' },
+        createdAt: new Date('2026-01-10T00:00:00Z'),
+        provider: CashierProvider.Recurly,
+      });
+    });
+
+    it('should default the quantity to 1 and leave out missing metadata', async () => {
+      await subscriptions.addCharge(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
+        description: 'Needles x10',
+        unitAmount: 1250,
+      });
+
+      expect(client.createLineItem).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.ACCOUNT_ID,
+        {
+          type: 'charge',
+          currency: 'USD',
+          unitAmount: 12.5,
+          quantity: 1,
+          description: 'Needles x10',
+        },
+      );
+    });
+
+    it('should send the idempotency key as the Idempotency-Key header', async () => {
+      await subscriptions.addCharge(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
+        ...PARAMS,
+        idempotencyKey: 'order-42-needles',
+      });
+
+      expect(client.createLineItem).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.ACCOUNT_ID,
+        expect.any(Object),
+        { headers: { 'Idempotency-Key': 'order-42-needles' } },
+      );
+    });
+
+    it.each([
+      ['canceled at the end of its period', 'CANCELED_SUBSCRIPTION'],
+      ['expired', 'EXPIRED_SUBSCRIPTION'],
+      ['paused', 'PAUSED_DISCOUNTED_SUBSCRIPTION'],
+    ] as const)(
+      'should reject a subscription that is %s without adding the charge',
+      async (_case, fixture) => {
+        client.getSubscription.mockResolvedValue(RECURLY_FIXTURES[fixture]);
+
+        await expect(
+          subscriptions.addCharge(RECURLY_FIXTURES.SUBSCRIPTION_ID, PARAMS),
+        ).rejects.toMatchObject({
+          constructor: SubscriptionError,
+          provider: CashierProvider.Recurly,
+        });
+        expect(client.createLineItem).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ['a blank description', { ...PARAMS, description: '' }],
+      ['a zero unit amount', { ...PARAMS, unitAmount: 0 }],
+      ['a fractional quantity', { ...PARAMS, quantity: 1.5 }],
+    ])('should reject %s without calling Recurly', async (_case, params) => {
+      await expect(
+        subscriptions.addCharge(RECURLY_FIXTURES.SUBSCRIPTION_ID, params),
+      ).rejects.toMatchObject({
+        constructor: ValidationError,
+        provider: CashierProvider.Recurly,
+      });
+      expect(client.getSubscription).not.toHaveBeenCalled();
+      expect(client.createLineItem).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('listCharges', () => {
+    const createLineItem = (id: string, currency: string) =>
+      ({
+        id,
+        account: { id: RECURLY_FIXTURES.ACCOUNT_ID },
+        type: 'charge',
+        state: 'pending',
+        description: `Item ${id}`,
+        unitAmount: 10,
+        quantity: 1,
+        subtotal: 10,
+        currency,
+        createdAt: new Date('2026-01-10T00:00:00Z'),
+      }) as recurly.LineItem;
+
+    it("should list the account's pending charges in the subscription's currency", async () => {
+      client.getSubscription.mockResolvedValue(
+        RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+      );
+      client.listAccountLineItems.mockReturnValue(
+        createRecurlyPager([
+          createLineItem('li_1', 'USD'),
+          createLineItem('li_2', 'EUR'),
+          createLineItem('li_3', 'usd'),
+        ]),
+      );
+
+      const charges = await subscriptions.listCharges(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+      );
+
+      expect(client.listAccountLineItems).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.ACCOUNT_ID,
+        { params: { state: 'pending', type: 'charge', limit: 200 } },
+      );
+      expect(charges.map((charge) => charge.id)).toEqual(['li_1', 'li_3']);
+      expect(charges[0]).toMatchObject({
+        unitAmount: 1000,
+        amount: 1000,
+        metadata: {},
+      });
+    });
+  });
+
+  describe('removeCharge', () => {
+    const LINE_ITEM = {
+      id: 'li_charge_1',
+      account: { id: RECURLY_FIXTURES.ACCOUNT_ID },
+      type: 'charge',
+      state: 'pending',
+      invoiceId: null,
+    } as recurly.LineItem;
+
+    beforeEach(() => {
+      client.getSubscription.mockResolvedValue(
+        RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+      );
+    });
+
+    it("should remove a pending charge on the subscription's account", async () => {
+      client.getLineItem.mockResolvedValue(LINE_ITEM);
+
+      await subscriptions.removeCharge(
+        RECURLY_FIXTURES.SUBSCRIPTION_ID,
+        'li_charge_1',
+      );
+
+      expect(client.getLineItem).toHaveBeenCalledWith('li_charge_1');
+      expect(client.removeLineItem).toHaveBeenCalledWith('li_charge_1');
+    });
+
+    it.each([
+      ['on another account', { account: { id: 'acct_other' } }],
+      ['a credit', { type: 'credit' }],
+    ])(
+      'should reject a line item %s with NotFoundError',
+      async (_case, overrides) => {
+        client.getLineItem.mockResolvedValue({ ...LINE_ITEM, ...overrides });
+
+        await expect(
+          subscriptions.removeCharge(
+            RECURLY_FIXTURES.SUBSCRIPTION_ID,
+            'li_charge_1',
+          ),
+        ).rejects.toMatchObject({
+          constructor: NotFoundError,
+          provider: CashierProvider.Recurly,
+        });
+        expect(client.removeLineItem).not.toHaveBeenCalled();
+      },
+    );
+
+    it('should reject a charge that is already on an invoice', async () => {
+      client.getLineItem.mockResolvedValue({
+        ...LINE_ITEM,
+        state: 'invoiced',
+        invoiceId: 'rec_inv_1',
+      });
+
+      await expect(
+        subscriptions.removeCharge(
+          RECURLY_FIXTURES.SUBSCRIPTION_ID,
+          'li_charge_1',
+        ),
+      ).rejects.toMatchObject({
+        constructor: ValidationError,
+        provider: CashierProvider.Recurly,
+      });
+      expect(client.removeLineItem).not.toHaveBeenCalled();
     });
   });
 });

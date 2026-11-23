@@ -1,6 +1,6 @@
 # Subscriptions
 
-`driver.subscriptions` lists, creates, changes and cancels subscriptions.
+`driver.subscriptions` lists, creates, changes and cancels subscriptions, and adds one-off charges to their next renewal.
 
 - [`subscriptions.list(params)`](#subscriptionslistparams)
 - [`subscriptions.cursorPaginate(params)`](#subscriptionscursorpaginateparams)
@@ -13,6 +13,9 @@
 - [`subscriptions.changeBillingDate(subscriptionId, date)`](#subscriptionschangebillingdatesubscriptionid-date)
 - [`subscriptions.cancel(subscriptionId, params?)`](#subscriptionscancelsubscriptionid-params)
 - [`subscriptions.resume(subscriptionId)`](#subscriptionsresumesubscriptionid)
+- [`subscriptions.addCharge(subscriptionId, params)`](#subscriptionsaddchargesubscriptionid-params)
+- [`subscriptions.listCharges(subscriptionId)`](#subscriptionslistchargessubscriptionid)
+- [`subscriptions.removeCharge(subscriptionId, chargeId)`](#subscriptionsremovechargesubscriptionid-chargeid)
 - [The `Subscription` object](#the-subscription-object)
 
 ## `subscriptions.list(params)`
@@ -313,6 +316,81 @@ await driver.subscriptions.resume('sub_123');
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Stripe   | Reads the subscription. When it cancels at period end, sets `cancel_at_period_end` to `false`. When it has a `cancel_at` date, clears it. When nothing is scheduled, rejects with `ValidationError`. |
 | Recurly  | Reactivates the `canceled` subscription. Recurly rejects a subscription that is not `canceled`.                                                                                                      |
+
+## `subscriptions.addCharge(subscriptionId, params)`
+
+Adds a one-off charge to the subscription's next renewal invoice and returns it. Use it for something the customer buys between renewals that should be billed with the next one.
+
+```ts
+const charge = await driver.subscriptions.addCharge('sub_123', {
+  description: 'Needles x10',
+  unitAmount: 1250,
+  quantity: 2,
+  metadata: { order: 'order-42' },
+  idempotencyKey: 'order-42-needles',
+});
+
+charge.amount; // 2500
+```
+
+| Parameter        | Type                     | Description                                                                  |
+| ---------------- | ------------------------ | ---------------------------------------------------------------------------- |
+| `description`    | `string`                 | Required. Shown on the invoice.                                              |
+| `unitAmount`     | `number`                 | Required. A positive integer in minor units, in the subscription's currency. |
+| `quantity`       | `number`                 | A positive integer. Defaults to `1`.                                         |
+| `metadata`       | `Record<string, string>` | Extra key and value pairs, stored on the charge.                             |
+| `idempotencyKey` | `string`                 | Makes a retry with the same key safe.                                        |
+
+Invalid parameters reject with `ValidationError` before any request. The charge is always in the subscription's currency. A subscription that does not renew rejects with `SubscriptionError`, because the charge would never be billed: one whose status is not `active`, `trialing` or `past_due`, or one set to cancel at or before the end of its current period.
+
+| Provider | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Stripe   | Reads the subscription, then creates an invoice item for it with `unit_amount` and `quantity`. Stripe bills it on the subscription's next invoice, which is the renewal unless the subscription is invoiced earlier, for example by [`subscriptions.update`](#subscriptionsupdatesubscriptionid-params) with `proration: 'invoiceNow'`. [`invoices.create`](invoices.md#invoicescreateparams) never picks it up. `idempotencyKey` is sent unchanged.                                                                                                               |
+| Recurly  | Reads the subscription, then creates a pending `charge` line item on its account, in major units, with `metadata` as custom fields. Recurly cannot tie a pending charge to one subscription, so it is billed on the account's next invoice, which is this subscription's renewal when the account has only this subscription. [`invoices.create`](invoices.md#invoicescreateparams) and [`payments.create`](payments.md#paymentscreateparams) never pick it up. The returned `subscriptionId` is `null`. `idempotencyKey` is sent as the `Idempotency-Key` header. |
+
+## `subscriptions.listCharges(subscriptionId)`
+
+Returns the charges still waiting for the subscription's next invoice.
+
+```ts
+const charges = await driver.subscriptions.listCharges('sub_123');
+```
+
+| Provider | Behavior                                                                                                                                                                                                                                                                                                    |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stripe   | Reads every pending invoice item of the subscription's customer and keeps the ones for this subscription.                                                                                                                                                                                                   |
+| Recurly  | Reads every pending `charge` line item on the subscription's account in the subscription's currency. Recurly does not tie them to a subscription, so these include the account's other pending charges, such as those from [`customers.debitBalance`](customers.md#customersdebitbalancecustomerid-params). |
+
+## `subscriptions.removeCharge(subscriptionId, chargeId)`
+
+Removes a charge before it is billed. It resolves with nothing.
+
+```ts
+await driver.subscriptions.removeCharge('sub_123', 'ii_123');
+```
+
+A charge that is not on the subscription, or on its account on Recurly, rejects with `NotFoundError`. A charge that is already on an invoice rejects with `ValidationError`, so refund it with [`invoices.refundLineItems`](invoices.md#invoicesrefundlineitemsinvoiceid-params) instead.
+
+| Provider | Behavior                          |
+| -------- | --------------------------------- |
+| Stripe   | Deletes the pending invoice item. |
+| Recurly  | Removes the pending line item.    |
+
+### The `SubscriptionCharge` object
+
+| Field            | Type                     | Description                                                                       |
+| ---------------- | ------------------------ | --------------------------------------------------------------------------------- |
+| `id`             | `string`                 | The Stripe invoice item id, or the Recurly line item id. `removeCharge` takes it. |
+| `customerId`     | `string \| null`         | The customer or account id.                                                       |
+| `subscriptionId` | `string \| null`         | The subscription it is billed with. Always `null` on Recurly.                     |
+| `description`    | `string \| null`         | What the charge is for.                                                           |
+| `unitAmount`     | `number`                 | The price per unit, in minor units.                                               |
+| `quantity`       | `number`                 | The quantity.                                                                     |
+| `amount`         | `number`                 | `unitAmount` times `quantity`, in minor units, before discounts and tax.          |
+| `currency`       | `string`                 | Uppercase ISO 4217 code.                                                          |
+| `metadata`       | `Record<string, string>` | Stripe: the invoice item's metadata. Recurly: the line item's custom fields.      |
+| `createdAt`      | `Date`                   | When it was added.                                                                |
+| `provider`       | `CashierProvider`        | The provider it came from.                                                        |
 
 ## The `Subscription` object
 

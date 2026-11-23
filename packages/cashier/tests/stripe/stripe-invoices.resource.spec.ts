@@ -41,6 +41,7 @@ const expectedLine = (id: string, overrides: Record<string, unknown> = {}) => ({
   proration: false,
   recurring: true,
   amountRefunded: 0,
+  metadata: {},
   ...overrides,
 });
 
@@ -649,6 +650,30 @@ describe('StripeInvoicesResource', () => {
       ]);
     });
 
+    it('should map the metadata of each line item', async () => {
+      const invoice = await getWith(
+        {
+          lines: {
+            data: [
+              createLine('il_addon', {
+                type: 'invoiceitem',
+                metadata: { order: 'order-42' },
+              }),
+            ],
+            has_more: false,
+          },
+        },
+        ['lineItems'],
+      );
+
+      expect(invoice.lineItems).toEqual([
+        expectedLine('il_addon', {
+          recurring: false,
+          metadata: { order: 'order-42' },
+        }),
+      ]);
+    });
+
     it('should page through the remaining line items', async () => {
       client.invoices.listLineItems
         .mockResolvedValueOnce({ data: [createLine('il_2')], has_more: true })
@@ -1084,10 +1109,12 @@ describe('StripeInvoicesResource', () => {
             amount: 2500,
             currency: 'GBP',
             reason: null,
+            metadata: {},
             createdAt: new Date(1767312000 * 1000),
             provider: CashierProvider.Stripe,
           },
         ],
+        metadata: {},
         createdAt: new Date(1767312000 * 1000),
         provider: CashierProvider.Stripe,
       });
@@ -1134,6 +1161,24 @@ describe('StripeInvoicesResource', () => {
         }),
         { idempotencyKey: 'refund-42' },
       );
+    });
+
+    it('should return the credit note metadata without the idempotency key', async () => {
+      client.creditNotes.create.mockResolvedValue({
+        ...CREDIT_NOTE,
+        metadata: { order: 'order-42', cashier_idempotency_key: 'refund-42' },
+      });
+
+      const refund = await invoices.refundLineItems(
+        STRIPE_FIXTURES.INVOICE_ID,
+        {
+          lineItems: [{ lineItemId: 'il_addon_1' }],
+          metadata: { order: 'order-42' },
+          idempotencyKey: 'refund-42',
+        },
+      );
+
+      expect(refund.metadata).toEqual({ order: 'order-42' });
     });
 
     it('should return the earlier credit note when retried with the same idempotency key', async () => {

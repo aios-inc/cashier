@@ -1,6 +1,7 @@
 import * as recurly from 'recurly';
 import { CashierProvider } from '../../../types/cashier.types';
 import {
+  AddSubscriptionChargeParams,
   CancelSubscriptionParams,
   CreateSubscriptionParams,
   CursorPaginateSubscriptionsParams,
@@ -8,6 +9,7 @@ import {
   ListSubscriptionsParams,
   ProviderSubscriptionRelation,
   Subscription,
+  SubscriptionCharge,
   SubscriptionStatusFilter,
   SubscriptionWith,
   SubscriptionsResource,
@@ -16,20 +18,26 @@ import {
 import { CursorPaginator } from '../../../types/pagination.types';
 import {
   DEFAULT_LIST_LIMIT,
+  RECURLY_MAX_LIST_LIMIT,
   RECURLY_SUBSCRIPTION_REFUNDS,
   RECURLY_SUBSCRIPTION_RELATIONS,
   RECURLY_SUBSCRIPTION_STATE_FILTERS,
 } from '../../../constants/cashier.constants';
+import { NotFoundError } from '../../../errors/not-found.error';
 import { ProviderError } from '../../../errors/provider.error';
 import { UnsupportedOperationError } from '../../../errors/unsupported-operation.error';
 import { ValidationError } from '../../../errors/validation.error';
+import { validateAddSubscriptionChargeParams } from '../../../utils/create-params.utils';
+import { toMajorUnits } from '../../../utils/money.utils';
 import { resolveRelations } from '../../../utils/relations.utils';
+import { assertSubscriptionRenews } from '../../../utils/subscription-charge.utils';
 import {
   RecurlySubscriptionLoaded,
   mapRecurlySubscription,
   mapRecurlySubscriptionStatus,
-  toRecurlyCustomFields,
 } from '../mappers/recurly-subscription.mapper';
+import { toRecurlyCustomFields } from '../mappers/recurly-custom-fields.mapper';
+import { mapRecurlySubscriptionCharge } from '../mappers/recurly-subscription-charge.mapper';
 import {
   findRecurlyBillingInfo,
   getRecurlyBillingInfo,
@@ -38,6 +46,7 @@ import {
   RECURLY_CODE_PREFIX,
   toRecurlyPlanReference,
 } from '../recurly-plan-reference';
+import { createRecurlyLineItem } from '../recurly-line-item';
 import { readRecurlyItems, readRecurlyPage } from '../recurly-page';
 import { recurlyRequest } from '../recurly-request';
 import { toRecurlySubscriptionChange } from '../recurly-subscription-change';
@@ -299,6 +308,96 @@ export class RecurlySubscriptionsResource implements SubscriptionsResource<Cashi
           nextBillDate: date,
         }),
       );
+    });
+  }
+
+  addCharge(
+    subscriptionId: string,
+    params: AddSubscriptionChargeParams,
+  ): Promise<SubscriptionCharge> {
+    return recurlyRequest(async () => {
+      validateAddSubscriptionChargeParams(params, CashierProvider.Recurly);
+
+      const {
+        description,
+        unitAmount,
+        quantity = 1,
+        metadata,
+        idempotencyKey,
+      } = params;
+      const subscription = await this.client.getSubscription(subscriptionId);
+
+      assertSubscriptionRenews(
+        mapRecurlySubscription(subscription),
+        CashierProvider.Recurly,
+      );
+
+      const currency = (subscription.currency ?? '').toUpperCase();
+
+      return mapRecurlySubscriptionCharge(
+        await createRecurlyLineItem(
+          this.client,
+          getAccountId(subscription),
+          {
+            type: 'charge',
+            currency,
+            unitAmount: toMajorUnits(unitAmount, currency),
+            quantity,
+            description,
+            ...(metadata
+              ? { customFields: toRecurlyCustomFields(metadata) }
+              : {}),
+          },
+          idempotencyKey,
+        ),
+      );
+    });
+  }
+
+  listCharges(subscriptionId: string): Promise<SubscriptionCharge[]> {
+    return recurlyRequest(async () => {
+      const subscription = await this.client.getSubscription(subscriptionId);
+      const currency = (subscription.currency ?? '').toUpperCase();
+      const lineItems = await readRecurlyItems(
+        this.client.listAccountLineItems(getAccountId(subscription), {
+          params: {
+            state: 'pending',
+            type: 'charge',
+            limit: RECURLY_MAX_LIST_LIMIT,
+          },
+        }),
+      );
+
+      return lineItems
+        .filter((lineItem) => lineItem.currency?.toUpperCase() === currency)
+        .map(mapRecurlySubscriptionCharge);
+    });
+  }
+
+  removeCharge(subscriptionId: string, chargeId: string): Promise<void> {
+    return recurlyRequest(async () => {
+      const [subscription, lineItem] = await Promise.all([
+        this.client.getSubscription(subscriptionId),
+        this.client.getLineItem(chargeId),
+      ]);
+
+      if (
+        lineItem.type !== 'charge' ||
+        lineItem.account?.id !== getAccountId(subscription)
+      ) {
+        throw new NotFoundError(
+          `Charge ${chargeId} does not belong to subscription ${subscriptionId}`,
+          { provider: CashierProvider.Recurly },
+        );
+      }
+
+      if (lineItem.state !== 'pending') {
+        fail(
+          `Charge ${chargeId} is already on invoice ${lineItem.invoiceId}, so it can no longer be removed`,
+        );
+      }
+
+      await this.client.removeLineItem(chargeId);
     });
   }
 

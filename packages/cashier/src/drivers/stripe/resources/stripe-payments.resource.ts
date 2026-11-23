@@ -105,6 +105,7 @@ export class StripePaymentsResource implements PaymentsResource<CashierProvider.
         currency,
         amount,
         paymentMethod,
+        onSession = false,
         description,
         metadata,
         idempotencyKey,
@@ -119,7 +120,7 @@ export class StripePaymentsResource implements PaymentsResource<CashierProvider.
             payment_method: paymentMethod,
             payment_method_types: STRIPE_OFF_SESSION_PAYMENT_METHOD_TYPES,
             confirm: true,
-            off_session: true,
+            ...(onSession ? { use_stripe_sdk: true } : { off_session: true }),
             ...(description ? { description } : {}),
             ...(metadata ? { metadata } : {}),
           },
@@ -132,14 +133,17 @@ export class StripePaymentsResource implements PaymentsResource<CashierProvider.
   refund(paymentId: string, params: RefundPaymentParams = {}): Promise<Refund> {
     return stripeRequest(async () =>
       mapStripeRefund(
-        await this.client.refunds.create({
-          payment_intent: paymentId,
-          ...(params.amount === undefined ? {} : { amount: params.amount }),
-          ...(params.reason
-            ? { reason: STRIPE_REFUND_REASONS[params.reason] }
-            : {}),
-          ...(params.metadata ? { metadata: params.metadata } : {}),
-        }),
+        await this.client.refunds.create(
+          {
+            payment_intent: paymentId,
+            ...(params.amount === undefined ? {} : { amount: params.amount }),
+            ...(params.reason
+              ? { reason: STRIPE_REFUND_REASONS[params.reason] }
+              : {}),
+            ...(params.metadata ? { metadata: params.metadata } : {}),
+          },
+          ...toStripeRequestOptions(params.idempotencyKey),
+        ),
       ),
     );
   }

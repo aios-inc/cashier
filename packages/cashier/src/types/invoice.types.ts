@@ -42,6 +42,7 @@ export interface Invoice {
   createdAt: Date;
   dueDate: Date | null;
   paidAt: Date | null;
+  metadata: Record<string, string>;
   provider: CashierProvider;
 }
 
@@ -58,6 +59,7 @@ export interface InvoiceLineItem {
   proration: boolean;
   recurring: boolean;
   amountRefunded: number;
+  metadata: Record<string, string>;
 }
 
 export type InvoiceEventType =
@@ -183,6 +185,7 @@ export interface InvoiceRefund {
   currency: string;
   lineItems: InvoiceLineItemRefund[];
   refunds: Refund[];
+  metadata: Record<string, string>;
   createdAt: Date;
   provider: CashierProvider;
 }
