@@ -17,6 +17,7 @@ import {
   RECURLY_RECURRING_LINE_ITEM_ORIGINS,
 } from '../../../constants/cashier.constants';
 import { toMinorUnits } from '../../../utils/money.utils';
+import { mapCustomFields } from './recurly-custom-fields.mapper';
 import { mapRecurlyPayment } from './recurly-payment.mapper';
 import { mapRecurlyRefundTransaction } from './recurly-refund.mapper';
 
@@ -83,6 +84,7 @@ export const mapRecurlyInvoiceLineItem = (
     proration: (lineItem.prorationRate ?? 1) !== 1,
     recurring: RECURLY_RECURRING_LINE_ITEM_ORIGINS.has(lineItem.origin ?? ''),
     amountRefunded,
+    metadata: mapCustomFields(lineItem.customFields),
   };
 };
 
@@ -126,6 +128,7 @@ export const mapRecurlyInvoice = (
     createdAt: invoice.createdAt ?? new Date(0),
     dueDate: invoice.dueAt ?? null,
     paidAt: invoice.state === 'paid' ? (invoice.closedAt ?? null) : null,
+    metadata: mapCustomFields(invoice.customFields),
     provider: CashierProvider.Recurly,
     ...(relations.has('refunds')
       ? { amountRefunded: mapRecurlyInvoiceAmountRefunded(invoice, currency) }
@@ -208,6 +211,7 @@ export const mapRecurlySubscriptionPreview = (
     proration: false,
     recurring: true,
     amountRefunded: 0,
+    metadata: {},
   });
   const lineItems = [
     toLineItem(
@@ -274,6 +278,7 @@ export const mapRecurlyCreditInvoice = (
           transaction.originalTransactionId ?? '',
         ),
       ),
+    metadata: mapCustomFields(creditInvoice.customFields),
     createdAt: creditInvoice.createdAt ?? new Date(0),
     provider: CashierProvider.Recurly,
   };

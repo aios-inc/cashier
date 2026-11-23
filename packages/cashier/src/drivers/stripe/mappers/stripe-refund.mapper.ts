@@ -30,6 +30,7 @@ export const mapStripeRefund = (refund: Stripe.Refund): Refund => ({
   amount: refund.amount,
   currency: refund.currency.toUpperCase(),
   reason: mapStripeRefundReason(refund.reason),
+  metadata: refund.metadata ?? {},
   createdAt: new Date(refund.created * 1000),
   provider: CashierProvider.Stripe,
 });

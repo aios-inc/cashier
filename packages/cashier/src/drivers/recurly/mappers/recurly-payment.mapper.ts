@@ -102,6 +102,8 @@ export const mapRecurlyPayment = (
     amount: toMinorUnits(transaction.amount ?? 0, currency),
     currency,
     description: transaction.description ?? null,
+    metadata: {},
+    nextAction: null,
     createdAt: transaction.createdAt ?? new Date(0),
     provider: CashierProvider.Recurly,
     ...(relations.has('refunds')

@@ -1,6 +1,7 @@
 import { StripeSubscriptionsResource } from '../../src/drivers/stripe/resources/stripe-subscriptions.resource';
 import { NotFoundError } from '../../src/errors/not-found.error';
 import { PaymentMethodError } from '../../src/errors/payment-method.error';
+import { SubscriptionError } from '../../src/errors/subscription.error';
 import { UnsupportedOperationError } from '../../src/errors/unsupported-operation.error';
 import { ValidationError } from '../../src/errors/validation.error';
 import { CashierProvider } from '../../src/types/cashier.types';
@@ -1225,6 +1226,267 @@ describe('StripeSubscriptionsResource', () => {
         provider: CashierProvider.Stripe,
       });
       expect(client.subscriptions.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('addCharge', () => {
+    const PARAMS = {
+      description: 'Needles x10',
+      unitAmount: 1250,
+      metadata: { order: 'order-42' },
+    };
+    const INVOICE_ITEM = {
+      id: 'ii_123',
+      customer: STRIPE_FIXTURES.CUSTOMER_ID,
+      subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID,
+      invoice: null,
+      description: 'Needles x10',
+      unit_amount: 1250,
+      quantity: 2,
+      amount: 2500,
+      currency: 'usd',
+      metadata: { order: 'order-42' },
+      date: 1767225600,
+    };
+
+    beforeEach(() => {
+      client.subscriptions.retrieve.mockResolvedValue(
+        STRIPE_FIXTURES.SUBSCRIPTION,
+      );
+      client.invoiceItems.create.mockResolvedValue(INVOICE_ITEM);
+    });
+
+    it('should add a pending invoice item to the subscription in its currency', async () => {
+      const charge = await subscriptions.addCharge(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        { ...PARAMS, quantity: 2 },
+      );
+
+      expect(client.subscriptions.retrieve).toHaveBeenCalledWith(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+      );
+      expect(client.invoiceItems.create).toHaveBeenCalledWith({
+        customer: STRIPE_FIXTURES.CUSTOMER_ID,
+        subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        currency: 'usd',
+        unit_amount: 1250,
+        quantity: 2,
+        description: 'Needles x10',
+        metadata: { order: 'order-42' },
+      });
+      expect(charge).toEqual({
+        id: 'ii_123',
+        customerId: STRIPE_FIXTURES.CUSTOMER_ID,
+        subscriptionId: STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        description: 'Needles x10',
+        unitAmount: 1250,
+        quantity: 2,
+        amount: 2500,
+        currency: 'USD',
+        metadata: { order: 'order-42' },
+        createdAt: new Date(1767225600 * 1000),
+        provider: CashierProvider.Stripe,
+      });
+    });
+
+    it('should default the quantity to 1 and leave out missing metadata', async () => {
+      await subscriptions.addCharge(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+        description: 'Needles x10',
+        unitAmount: 1250,
+      });
+
+      expect(client.invoiceItems.create).toHaveBeenCalledWith({
+        customer: STRIPE_FIXTURES.CUSTOMER_ID,
+        subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        currency: 'usd',
+        unit_amount: 1250,
+        quantity: 1,
+        description: 'Needles x10',
+      });
+    });
+
+    it('should pass the idempotency key as is', async () => {
+      await subscriptions.addCharge(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
+        ...PARAMS,
+        idempotencyKey: 'order-42-needles',
+      });
+
+      expect(client.invoiceItems.create).toHaveBeenCalledWith(
+        expect.any(Object),
+        { idempotencyKey: 'order-42-needles' },
+      );
+    });
+
+    it('should add the charge to a trialing subscription that has a cancellation after its next renewal', async () => {
+      client.subscriptions.retrieve.mockResolvedValue({
+        ...STRIPE_FIXTURES.SUBSCRIPTION,
+        status: 'trialing',
+        cancel_at: STRIPE_FIXTURES.SUBSCRIPTION.current_period_end + 86400,
+      });
+
+      await subscriptions.addCharge(STRIPE_FIXTURES.SUBSCRIPTION_ID, PARAMS);
+
+      expect(client.invoiceItems.create).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ['canceled', { status: 'canceled' }],
+      ['incomplete', { status: 'incomplete' }],
+      ['set to cancel at period end', { cancel_at_period_end: true }],
+      [
+        'set to cancel before its next renewal',
+        { cancel_at: STRIPE_FIXTURES.SUBSCRIPTION.current_period_end },
+      ],
+    ])(
+      'should reject a subscription that is %s without adding the charge',
+      async (_case, overrides) => {
+        client.subscriptions.retrieve.mockResolvedValue({
+          ...STRIPE_FIXTURES.SUBSCRIPTION,
+          ...overrides,
+        });
+
+        await expect(
+          subscriptions.addCharge(STRIPE_FIXTURES.SUBSCRIPTION_ID, PARAMS),
+        ).rejects.toMatchObject({
+          constructor: SubscriptionError,
+          provider: CashierProvider.Stripe,
+        });
+        expect(client.invoiceItems.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ['a blank description', { ...PARAMS, description: ' ' }],
+      ['a zero unit amount', { ...PARAMS, unitAmount: 0 }],
+      ['a fractional unit amount', { ...PARAMS, unitAmount: 12.5 }],
+      ['a zero quantity', { ...PARAMS, quantity: 0 }],
+      ['a fractional quantity', { ...PARAMS, quantity: 1.5 }],
+    ])('should reject %s without calling Stripe', async (_case, params) => {
+      await expect(
+        subscriptions.addCharge(STRIPE_FIXTURES.SUBSCRIPTION_ID, params),
+      ).rejects.toMatchObject({
+        constructor: ValidationError,
+        provider: CashierProvider.Stripe,
+      });
+      expect(client.subscriptions.retrieve).not.toHaveBeenCalled();
+      expect(client.invoiceItems.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('listCharges', () => {
+    const createInvoiceItem = (id: string, subscription: string | null) => ({
+      id,
+      customer: STRIPE_FIXTURES.CUSTOMER_ID,
+      subscription,
+      invoice: null,
+      description: `Item ${id}`,
+      unit_amount: 1000,
+      quantity: 1,
+      amount: 1000,
+      currency: 'usd',
+      metadata: {},
+      date: 1767225600,
+    });
+
+    beforeEach(() => {
+      client.subscriptions.retrieve.mockResolvedValue(
+        STRIPE_FIXTURES.SUBSCRIPTION,
+      );
+    });
+
+    it("should list the customer's pending invoice items and keep the subscription's", async () => {
+      client.invoiceItems.list
+        .mockResolvedValueOnce({
+          data: [
+            createInvoiceItem('ii_1', STRIPE_FIXTURES.SUBSCRIPTION_ID),
+            createInvoiceItem('ii_2', 'sub_other'),
+          ],
+          has_more: true,
+        })
+        .mockResolvedValueOnce({
+          data: [
+            createInvoiceItem('ii_3', null),
+            createInvoiceItem('ii_4', STRIPE_FIXTURES.SUBSCRIPTION_ID),
+          ],
+          has_more: false,
+        });
+
+      const charges = await subscriptions.listCharges(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+      );
+
+      expect(client.invoiceItems.list).toHaveBeenNthCalledWith(1, {
+        customer: STRIPE_FIXTURES.CUSTOMER_ID,
+        pending: true,
+        limit: 100,
+      });
+      expect(client.invoiceItems.list).toHaveBeenNthCalledWith(2, {
+        customer: STRIPE_FIXTURES.CUSTOMER_ID,
+        pending: true,
+        limit: 100,
+        starting_after: 'ii_2',
+      });
+      expect(charges.map((charge) => charge.id)).toEqual(['ii_1', 'ii_4']);
+    });
+  });
+
+  describe('removeCharge', () => {
+    const INVOICE_ITEM = {
+      id: 'ii_123',
+      subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID,
+      invoice: null,
+    };
+
+    it('should delete a pending invoice item of the subscription', async () => {
+      client.invoiceItems.retrieve.mockResolvedValue(INVOICE_ITEM);
+
+      await subscriptions.removeCharge(
+        STRIPE_FIXTURES.SUBSCRIPTION_ID,
+        'ii_123',
+      );
+
+      expect(client.invoiceItems.retrieve).toHaveBeenCalledWith('ii_123');
+      expect(client.invoiceItems.del).toHaveBeenCalledWith('ii_123');
+    });
+
+    it('should reject an invoice item of another subscription with NotFoundError', async () => {
+      client.invoiceItems.retrieve.mockResolvedValue({
+        ...INVOICE_ITEM,
+        subscription: 'sub_other',
+      });
+
+      await expect(
+        subscriptions.removeCharge(STRIPE_FIXTURES.SUBSCRIPTION_ID, 'ii_123'),
+      ).rejects.toMatchObject({
+        constructor: NotFoundError,
+        provider: CashierProvider.Stripe,
+      });
+      expect(client.invoiceItems.del).not.toHaveBeenCalled();
+    });
+
+    it('should reject an invoice item that is already on an invoice', async () => {
+      client.invoiceItems.retrieve.mockResolvedValue({
+        ...INVOICE_ITEM,
+        invoice: 'in_123',
+      });
+
+      await expect(
+        subscriptions.removeCharge(STRIPE_FIXTURES.SUBSCRIPTION_ID, 'ii_123'),
+      ).rejects.toMatchObject({
+        constructor: ValidationError,
+        provider: CashierProvider.Stripe,
+      });
+      expect(client.invoiceItems.del).not.toHaveBeenCalled();
+    });
+
+    it('should map a missing invoice item to NotFoundError', async () => {
+      client.invoiceItems.retrieve.mockRejectedValue(
+        createStripeMissingResourceError(),
+      );
+
+      await expect(
+        subscriptions.removeCharge(STRIPE_FIXTURES.SUBSCRIPTION_ID, 'ii_404'),
+      ).rejects.toBeInstanceOf(NotFoundError);
     });
   });
 });

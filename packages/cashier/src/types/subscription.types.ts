@@ -159,6 +159,28 @@ export interface CancelSubscriptionParams {
   refund?: SubscriptionRefund;
 }
 
+export interface SubscriptionCharge {
+  id: string;
+  customerId: string | null;
+  subscriptionId: string | null;
+  description: string | null;
+  unitAmount: number;
+  quantity: number;
+  amount: number;
+  currency: string;
+  metadata: Record<string, string>;
+  createdAt: Date;
+  provider: CashierProvider;
+}
+
+export interface AddSubscriptionChargeParams {
+  description: string;
+  unitAmount: number;
+  quantity?: number;
+  metadata?: Record<string, string>;
+  idempotencyKey?: string;
+}
+
 export interface SubscriptionsResource<
   Provider extends CashierProvider = CashierProvider,
 > {
@@ -185,4 +207,10 @@ export interface SubscriptionsResource<
   ): Promise<Subscription>;
   resume(subscriptionId: string): Promise<Subscription>;
   changeBillingDate(subscriptionId: string, date: Date): Promise<Subscription>;
+  addCharge(
+    subscriptionId: string,
+    params: AddSubscriptionChargeParams,
+  ): Promise<SubscriptionCharge>;
+  listCharges(subscriptionId: string): Promise<SubscriptionCharge[]>;
+  removeCharge(subscriptionId: string, chargeId: string): Promise<void>;
 }

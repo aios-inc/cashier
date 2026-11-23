@@ -12,6 +12,7 @@ import {
   InvoiceStatus,
   InvoiceWith,
 } from '../../../types/invoice.types';
+import { STRIPE_IDEMPOTENCY_METADATA_KEY } from '../../../constants/cashier.constants';
 import {
   fromUnixSeconds,
   getExpandableId,
@@ -48,6 +49,7 @@ export const mapStripeInvoiceLineItem = (
   proration: lineItem.proration,
   recurring: lineItem.type === 'subscription',
   amountRefunded,
+  metadata: lineItem.metadata ?? {},
 });
 
 const mapStripeInvoiceTimeline = (invoice: Stripe.Invoice): InvoiceEvent[] => {
@@ -91,6 +93,7 @@ export const mapStripeInvoice = (
     createdAt: new Date(invoice.created * 1000),
     dueDate: fromUnixSeconds(invoice.due_date),
     paidAt: fromUnixSeconds(invoice.status_transitions?.paid_at),
+    metadata: invoice.metadata ?? {},
     provider: CashierProvider.Stripe,
     ...(relations.has('refunds')
       ? { amountRefunded: getExpanded(invoice.charge)?.amount_refunded ?? 0 }
@@ -134,6 +137,15 @@ export const mapStripeInvoicePreview = (
   provider: CashierProvider.Stripe,
 });
 
+const withoutIdempotencyKey = (
+  metadata: Stripe.Metadata | null,
+): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(metadata ?? {}).filter(
+      ([key]) => key !== STRIPE_IDEMPOTENCY_METADATA_KEY,
+    ),
+  );
+
 export const mapStripeCreditNote = (
   creditNote: Stripe.CreditNote,
   lineItems: InvoiceLineItemRefund[],
@@ -147,6 +159,7 @@ export const mapStripeCreditNote = (
     currency: creditNote.currency.toUpperCase(),
     lineItems,
     refunds: refund ? [mapStripeRefund(refund)] : [],
+    metadata: withoutIdempotencyKey(creditNote.metadata),
     createdAt: new Date(creditNote.created * 1000),
     provider: CashierProvider.Stripe,
   };

@@ -54,6 +54,7 @@ export const mapRecurlyRefund = (
     ),
     currency,
     reason: null,
+    metadata: {},
     createdAt: transaction?.createdAt ?? creditInvoice.createdAt ?? new Date(0),
     provider: CashierProvider.Recurly,
   };
@@ -72,6 +73,7 @@ export const mapRecurlyRefundTransaction = (
     amount: toMinorUnits(Math.abs(transaction.amount ?? 0), currency),
     currency,
     reason: null,
+    metadata: {},
     createdAt: transaction.createdAt ?? new Date(0),
     provider: CashierProvider.Recurly,
   };

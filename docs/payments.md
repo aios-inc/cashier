@@ -96,7 +96,7 @@ It returns a `CursorPaginator<Payment>`. See [Pagination and limits](drivers.md#
 
 ## `payments.create(params)`
 
-Charges a customer's saved payment method right away, off-session, and returns the payment.
+Charges a customer's saved payment method right away and returns the payment. By default the customer is not there to authenticate (off-session). Pass `onSession: true` when they are, so they can complete 3D Secure. See [3D Secure](#3d-secure).
 
 ```ts
 const payment = await driver.payments.create({
@@ -110,24 +110,46 @@ const payment = await driver.payments.create({
 });
 ```
 
-| Parameter        | Type                     | Description                                                                 |
-| ---------------- | ------------------------ | --------------------------------------------------------------------------- |
-| `customer`       | `string`                 | Required. The customer id.                                                  |
-| `currency`       | `string`                 | Required. ISO 4217 code, for example `EUR`. Cashier never picks a currency. |
-| `amount`         | `number`                 | Required. A positive integer in minor units.                                |
-| `paymentMethod`  | `string`                 | Required. Stripe payment method id or Recurly billing info id.              |
-| `description`    | `string`                 | What the payment is for.                                                    |
-| `metadata`       | `Record<string, string>` | Extra key and value pairs.                                                  |
-| `idempotencyKey` | `string`                 | Makes a retry with the same key safe.                                       |
+| Parameter        | Type                     | Description                                                                                                          |
+| ---------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `customer`       | `string`                 | Required. The customer id.                                                                                           |
+| `currency`       | `string`                 | Required. ISO 4217 code, for example `EUR`. Cashier never picks a currency.                                          |
+| `amount`         | `number`                 | Required. A positive integer in minor units.                                                                         |
+| `paymentMethod`  | `string`                 | Required. Stripe payment method id or Recurly billing info id.                                                       |
+| `onSession`      | `boolean`                | `true` when the customer is present and can authenticate, for example in your app. Defaults to `false`. Stripe only. |
+| `description`    | `string`                 | What the payment is for.                                                                                             |
+| `metadata`       | `Record<string, string>` | Extra key and value pairs.                                                                                           |
+| `idempotencyKey` | `string`                 | Makes a retry with the same key safe.                                                                                |
 
 Invalid parameters reject with `ValidationError` before any request. The returned `id` is the one `payments.refund` takes and `payments.list` returns.
 
-| Provider | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Stripe   | Creates and confirms an off-session PaymentIntent limited to the `card` and `link` payment method types, so redirect-based methods and the methods configured in the Dashboard do not apply. The `id` is the PaymentIntent id. When the bank asks for 3D Secure and Stripe leaves the PaymentIntent in `requires_action`, the payment comes back with status `incomplete` instead of rejecting. `idempotencyKey` is sent unchanged. |
-| Recurly  | Looks up the account, then makes one purchase with the `automatic` collection method and one line item for `amount`, charged to `paymentMethod`. `metadata` is saved as custom fields on the line item. The `id` is the purchase transaction id. `idempotencyKey` is sent as the `Idempotency-Key` header.                                                                                                                          |
+| Provider | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stripe   | Creates and confirms a PaymentIntent limited to the `card` and `link` payment method types, so redirect-based methods and the methods configured in the Dashboard do not apply. It confirms off-session, or with `onSession` for Stripe's client SDKs (`use_stripe_sdk`). The `id` is the PaymentIntent id. When the bank asks for 3D Secure and Stripe leaves the PaymentIntent in `requires_action`, the payment comes back with status `incomplete` and a `nextAction` instead of rejecting. `idempotencyKey` is sent unchanged. |
+| Recurly  | Looks up the account, then makes one purchase with the `automatic` collection method and one line item for `amount`, charged to `paymentMethod`. `metadata` is saved as custom fields on the line item. The `id` is the purchase transaction id. `idempotencyKey` is sent as the `Idempotency-Key` header. `onSession` rejects with `UnsupportedOperationError` before any request, because Recurly does not confirm payments on-session.                                                                                           |
 
 A declined payment rejects with `PaymentFailedError` or `PaymentMethodError` on both providers. See [Errors](errors.md). On Stripe, a card that needs authentication off-session usually declines with `authentication_required`, which is a `PaymentFailedError`.
+
+### 3D Secure
+
+When the customer is in your app, pass `onSession: true`. If the bank asks for 3D Secure, the payment comes back with status `incomplete` and `nextAction` set. Send `nextAction.clientSecret` to the customer's app and pass it to Stripe's client SDK, for example `handleNextAction` in Stripe.js or React Native. Once the customer authenticates, Stripe finishes the payment by itself. Read the result with [`payments.get`](#paymentsgetpaymentid-params) or from Stripe's webhooks.
+
+```ts
+const payment = await driver.payments.create({
+  customer: 'cus_123',
+  currency: 'GBP',
+  amount: 2500,
+  paymentMethod: 'pm_123',
+  onSession: true,
+  idempotencyKey: 'order-42',
+});
+
+if (payment.nextAction?.type === 'authenticate') {
+  return { clientSecret: payment.nextAction.clientSecret };
+}
+```
+
+The client secret lets the customer complete the payment, so send it only to that customer and keep it out of logs.
 
 ## `payments.refund(paymentId, params?)`
 
@@ -147,18 +169,19 @@ const partialRefund = await driver.payments.refund('pi_123', {
 
 `paymentId` is the `id` of a [`Payment`](#the-payment-object).
 
-| Parameter  | Type                     | Description                                                                                |
-| ---------- | ------------------------ | ------------------------------------------------------------------------------------------ |
-| `amount`   | `number`                 | The amount to refund, in minor units. Leave it out to refund all that is still refundable. |
-| `reason`   | `RefundReason`           | Why the payment is refunded. See [Refund reasons](#refund-reasons).                        |
-| `metadata` | `Record<string, string>` | Stored on the refund where the provider supports it.                                       |
+| Parameter        | Type                     | Description                                                                                |
+| ---------------- | ------------------------ | ------------------------------------------------------------------------------------------ |
+| `amount`         | `number`                 | The amount to refund, in minor units. Leave it out to refund all that is still refundable. |
+| `reason`         | `RefundReason`           | Why the payment is refunded. See [Refund reasons](#refund-reasons).                        |
+| `metadata`       | `Record<string, string>` | Stored on the refund where the provider supports it.                                       |
+| `idempotencyKey` | `string`                 | Makes a retry with the same key safe.                                                      |
 
 Pass the same parameters on every provider. A provider that cannot store `reason` or `metadata` ignores them, so the refund itself never depends on them.
 
-| Provider | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Stripe   | Creates a refund for the PaymentIntent, with `reason` mapped to Stripe's reason and `metadata` stored on the refund.                                                                                                                                                                                                                                                                                                                                                            |
-| Recurly  | Recurly refunds invoices, not transactions. Cashier loads the transaction, then refunds its invoice by amount, with the amount converted to major units. Without `amount`, it refunds the invoice's refundable amount, which is more than the payment when the invoice was also paid by other transactions. A payment without an invoice rejects with `ValidationError`. Recurly has nowhere to store a reason or metadata on a refund, so `reason` and `metadata` are ignored. |
+| Provider | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stripe   | Creates a refund for the PaymentIntent, with `reason` mapped to Stripe's reason and `metadata` stored on the refund. `idempotencyKey` is sent unchanged.                                                                                                                                                                                                                                                                                                                                                                                  |
+| Recurly  | Recurly refunds invoices, not transactions. Cashier loads the transaction, then refunds its invoice by amount, with the amount converted to major units. Without `amount`, it refunds the invoice's refundable amount, which is more than the payment when the invoice was also paid by other transactions. A payment without an invoice rejects with `ValidationError`. Recurly has nowhere to store a reason or metadata on a refund, so `reason` and `metadata` are ignored. `idempotencyKey` is sent as the `Idempotency-Key` header. |
 
 A payment that does not exist rejects with `NotFoundError`. A payment that is already fully refunded, or an `amount` larger than what is left to refund, rejects with `ValidationError`. See [Errors](errors.md).
 
@@ -178,16 +201,17 @@ On Stripe, `RefundReason.Fraudulent` also adds the card and email to your Stripe
 
 ### The `Refund` object
 
-| Field       | Type                   | Description                                                                                                                                                             |
-| ----------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`        | `string`               | Stripe's refund id, or the id of Recurly's `refund` transaction.                                                                                                        |
-| `paymentId` | `string`               | The id of the refunded payment.                                                                                                                                         |
-| `status`    | `RefundStatus`         | See below.                                                                                                                                                              |
-| `amount`    | `number`               | The amount refunded, in minor units.                                                                                                                                    |
-| `currency`  | `string`               | Uppercase ISO 4217 code.                                                                                                                                                |
-| `reason`    | `RefundReason \| null` | Stripe's reason as a `RefundReason`. `null` when there is none or Stripe's reason has no `RefundReason`, such as `expired_uncaptured_charge`. Always `null` on Recurly. |
-| `createdAt` | `Date`                 | When the refund was created.                                                                                                                                            |
-| `provider`  | `CashierProvider`      | The provider it came from.                                                                                                                                              |
+| Field       | Type                     | Description                                                                                                                                                             |
+| ----------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`        | `string`                 | Stripe's refund id, or the id of Recurly's `refund` transaction.                                                                                                        |
+| `paymentId` | `string`                 | The id of the refunded payment.                                                                                                                                         |
+| `status`    | `RefundStatus`           | See below.                                                                                                                                                              |
+| `amount`    | `number`                 | The amount refunded, in minor units.                                                                                                                                    |
+| `currency`  | `string`                 | Uppercase ISO 4217 code.                                                                                                                                                |
+| `reason`    | `RefundReason \| null`   | Stripe's reason as a `RefundReason`. `null` when there is none or Stripe's reason has no `RefundReason`, such as `expired_uncaptured_charge`. Always `null` on Recurly. |
+| `metadata`  | `Record<string, string>` | Stripe: the refund's metadata. Always empty on Recurly.                                                                                                                 |
+| `createdAt` | `Date`                   | When the refund was created.                                                                                                                                            |
+| `provider`  | `CashierProvider`        | The provider it came from.                                                                                                                                              |
 
 On Recurly, the refund is read from the credit invoice that `refundInvoice` returns: its `refund` transaction for this payment, or its first `refund` transaction. When Recurly issued the whole refund as account credit, there is no refund transaction, so `id` is the credit invoice's id and `status` is `unknown`.
 
@@ -267,17 +291,19 @@ The result type only has the fields you loaded, so reading `receiptUrl` without 
 
 ## The `Payment` object
 
-| Field         | Type              | Description                                 |
-| ------------- | ----------------- | ------------------------------------------- |
-| `id`          | `string`          | The provider's id.                          |
-| `customerId`  | `string \| null`  | The customer or account id.                 |
-| `invoiceId`   | `string \| null`  | The invoice it paid, when there is one.     |
-| `status`      | `PaymentStatus`   | See below.                                  |
-| `amount`      | `number`          | In minor units.                             |
-| `currency`    | `string`          | Uppercase ISO 4217 code.                    |
-| `description` | `string \| null`  | The payment's description, when it has one. |
-| `createdAt`   | `Date`            | When the payment was created.               |
-| `provider`    | `CashierProvider` | The provider it came from.                  |
+| Field         | Type                        | Description                                                                                                                                                                                                                   |
+| ------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`          | `string`                    | The provider's id.                                                                                                                                                                                                            |
+| `customerId`  | `string \| null`            | The customer or account id.                                                                                                                                                                                                   |
+| `invoiceId`   | `string \| null`            | The invoice it paid, when there is one.                                                                                                                                                                                       |
+| `status`      | `PaymentStatus`             | See below.                                                                                                                                                                                                                    |
+| `amount`      | `number`                    | In minor units.                                                                                                                                                                                                               |
+| `currency`    | `string`                    | Uppercase ISO 4217 code.                                                                                                                                                                                                      |
+| `description` | `string \| null`            | The payment's description, when it has one.                                                                                                                                                                                   |
+| `metadata`    | `Record<string, string>`    | Stripe: the PaymentIntent's metadata. Always empty on Recurly, which keeps the `metadata` of `payments.create` on the invoice line item, so read it from the invoice's [`lineItems`](invoices.md#the-invoicelineitem-object). |
+| `nextAction`  | `PaymentNextAction \| null` | What the customer has to do before the payment can finish. See [3D Secure](#3d-secure). Always `null` on Recurly.                                                                                                             |
+| `createdAt`   | `Date`                      | When the payment was created.                                                                                                                                                                                                 |
+| `provider`    | `CashierProvider`           | The provider it came from.                                                                                                                                                                                                    |
 
 These fields are added by `with`:
 
@@ -296,6 +322,13 @@ These fields are added by `with`:
 | `timeline`            | `PaymentEvent[]`               | `timeline`            | See below                                                                                            | See below                                                                                                        |
 
 Amounts are in minor units. `amountRefunded` is `0` when nothing was refunded. `PaymentMethodDetails` is described in [Payment methods](payment-methods.md#the-paymentmethod-object).
+
+### The `PaymentNextAction` object
+
+| Field          | Type             | Description                                                                                                   |
+| -------------- | ---------------- | ------------------------------------------------------------------------------------------------------------- |
+| `type`         | `'authenticate'` | The customer has to authenticate the payment, for example with 3D Secure.                                     |
+| `clientSecret` | `string`         | The PaymentIntent's client secret, for Stripe's client SDKs. Set when the PaymentIntent is `requires_action`. |
 
 ### The payment timeline
 

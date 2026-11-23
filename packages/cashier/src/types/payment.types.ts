@@ -38,6 +38,11 @@ export interface PaymentDispute {
   evidenceDueBy: Date | null;
 }
 
+export interface PaymentNextAction {
+  type: 'authenticate';
+  clientSecret: string;
+}
+
 export interface PaymentSubscription {
   id: string;
   status: SubscriptionStatus | null;
@@ -52,6 +57,8 @@ export interface Payment {
   amount: number;
   currency: string;
   description: string | null;
+  metadata: Record<string, string>;
+  nextAction: PaymentNextAction | null;
   createdAt: Date;
   provider: CashierProvider;
 }
@@ -63,6 +70,7 @@ export interface Refund {
   amount: number;
   currency: string;
   reason: RefundReason | null;
+  metadata: Record<string, string>;
   createdAt: Date;
   provider: CashierProvider;
 }
@@ -132,6 +140,7 @@ export interface CreatePaymentParams {
   currency: string;
   amount: number;
   paymentMethod: string;
+  onSession?: boolean;
   description?: string;
   metadata?: Record<string, string>;
   idempotencyKey?: string;
@@ -141,6 +150,7 @@ export interface RefundPaymentParams {
   amount?: number;
   reason?: RefundReason;
   metadata?: Record<string, string>;
+  idempotencyKey?: string;
 }
 
 export interface SendReceiptParams {

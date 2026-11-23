@@ -14,6 +14,7 @@ import {
   SubscriptionWith,
 } from '../../../types/subscription.types';
 import { toMinorUnits } from '../../../utils/money.utils';
+import { mapCustomFields } from './recurly-custom-fields.mapper';
 import { mapRecurlyInvoice } from './recurly-invoice.mapper';
 import { mapRecurlySubscriptionPaymentMethod } from './recurly-payment-method.mapper';
 
@@ -88,15 +89,6 @@ const mapRecurlySubscriptionDiscount = (
   };
 };
 
-export const mapCustomFields = (
-  customFields: recurly.CustomField[] | null | undefined,
-): Record<string, string> =>
-  Object.fromEntries(
-    (customFields ?? [])
-      .filter((field) => field.name)
-      .map((field) => [field.name as string, field.value ?? '']),
-  );
-
 export const mapRecurlySubscription = (
   subscription: recurly.Subscription,
   relations: ReadonlySet<SubscriptionRelation> = new Set(),
@@ -167,8 +159,3 @@ export const mapRecurlySubscription = (
       : {}),
   };
 };
-
-export const toRecurlyCustomFields = (
-  metadata: Record<string, string>,
-): recurly.CustomField[] =>
-  Object.entries(metadata).map(([name, value]) => ({ name, value }));

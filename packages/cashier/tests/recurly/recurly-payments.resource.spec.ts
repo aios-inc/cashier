@@ -352,6 +352,17 @@ describe('RecurlyPaymentsResource', () => {
       });
     });
 
+    it('should reject an on-session payment without calling Recurly', async () => {
+      await expect(
+        payments.create({ ...PARAMS, onSession: true }),
+      ).rejects.toMatchObject({
+        constructor: UnsupportedOperationError,
+        provider: CashierProvider.Recurly,
+      });
+      expect(client.getAccount).not.toHaveBeenCalled();
+      expect(client.createPurchase).not.toHaveBeenCalled();
+    });
+
     it('should return the purchase transaction as a payment that can be refunded', async () => {
       client.getTransaction.mockResolvedValue(
         RECURLY_FIXTURES.SUCCESSFUL_TRANSACTION,
@@ -432,6 +443,19 @@ describe('RecurlyPaymentsResource', () => {
         { type: 'amount' },
       );
       expect(refund).toEqual(RECURLY_FIXTURES.EXPECTED_REFUND);
+    });
+
+    it('should send the idempotency key as the Idempotency-Key header', async () => {
+      await payments.refund(RECURLY_FIXTURES.PAYMENT_ID, {
+        amount: 4050,
+        idempotencyKey: 'refund-42',
+      });
+
+      expect(client.refundInvoice).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.INVOICE_ID,
+        { type: 'amount', amount: 40.5 },
+        { headers: { 'Idempotency-Key': 'refund-42' } },
+      );
     });
 
     it.each([

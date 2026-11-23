@@ -2,6 +2,7 @@ import { CashierProvider } from '../types/cashier.types';
 import { AdjustBalanceParams } from '../types/customer.types';
 import { CreateInvoiceParams } from '../types/invoice.types';
 import { CreatePaymentParams } from '../types/payment.types';
+import { AddSubscriptionChargeParams } from '../types/subscription.types';
 import { ValidationError } from '../errors/validation.error';
 
 const isPositiveInteger = (value: number): boolean =>
@@ -94,5 +95,20 @@ export const validateAdjustBalanceParams = (
 
   if (!isPositiveInteger(amount)) {
     fail('The amount must be a positive integer in minor units', provider);
+  }
+};
+
+export const validateAddSubscriptionChargeParams = (
+  { description, unitAmount, quantity }: AddSubscriptionChargeParams,
+  provider: CashierProvider,
+): void => {
+  if (!description?.trim()) fail('A description is required', provider);
+
+  if (!isPositiveInteger(unitAmount)) {
+    fail('The unit amount must be a positive integer in minor units', provider);
+  }
+
+  if (quantity !== undefined && !isPositiveInteger(quantity)) {
+    fail('The quantity must be a positive integer', provider);
   }
 };

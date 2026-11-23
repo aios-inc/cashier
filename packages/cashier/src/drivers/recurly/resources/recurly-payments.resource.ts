@@ -19,6 +19,7 @@ import {
   RECURLY_PAYMENT_RELATIONS,
 } from '../../../constants/cashier.constants';
 import { ProviderError } from '../../../errors/provider.error';
+import { UnsupportedOperationError } from '../../../errors/unsupported-operation.error';
 import { ValidationError } from '../../../errors/validation.error';
 import { validateCreatePaymentParams } from '../../../utils/create-params.utils';
 import { resolveRelations } from '../../../utils/relations.utils';
@@ -36,6 +37,14 @@ import {
 import { recurlyRequest } from '../recurly-request';
 
 type RecurlyPaymentRelation = ProviderPaymentRelation<CashierProvider.Recurly>;
+
+interface RecurlyRefundClient {
+  refundInvoice(
+    invoiceId: string,
+    body: recurly.InvoiceRefund,
+    options?: { headers: Record<string, string> },
+  ): Promise<recurly.Invoice>;
+}
 
 const resolvePaymentRelations = <Relation extends RecurlyPaymentRelation>(
   requested?: readonly Relation[],
@@ -119,6 +128,13 @@ export class RecurlyPaymentsResource implements PaymentsResource<CashierProvider
     return recurlyRequest(async () => {
       validateCreatePaymentParams(params, CashierProvider.Recurly);
 
+      if (params.onSession) {
+        throw new UnsupportedOperationError(
+          'Recurly cannot confirm a payment on-session, so onSession is not supported',
+          { provider: CashierProvider.Recurly },
+        );
+      }
+
       const {
         customer,
         amount,
@@ -163,7 +179,7 @@ export class RecurlyPaymentsResource implements PaymentsResource<CashierProvider
 
   refund(
     paymentId: string,
-    { amount }: RefundPaymentParams = {},
+    { amount, idempotencyKey }: RefundPaymentParams = {},
   ): Promise<Refund> {
     return recurlyRequest(async () => {
       const transaction = await this.client.getTransaction(paymentId);
@@ -177,14 +193,20 @@ export class RecurlyPaymentsResource implements PaymentsResource<CashierProvider
       }
 
       const currency = (transaction.currency ?? '').toUpperCase();
+      const refunds = this.client as unknown as RecurlyRefundClient;
+      const body: recurly.InvoiceRefund = {
+        type: 'amount',
+        ...(amount === undefined
+          ? {}
+          : { amount: toMajorUnits(amount, currency) }),
+      };
 
       return mapRecurlyRefund(
-        await this.client.refundInvoice(invoiceId, {
-          type: 'amount',
-          ...(amount === undefined
-            ? {}
-            : { amount: toMajorUnits(amount, currency) }),
-        }),
+        idempotencyKey
+          ? await refunds.refundInvoice(invoiceId, body, {
+              headers: { 'Idempotency-Key': idempotencyKey },
+            })
+          : await refunds.refundInvoice(invoiceId, body),
         transaction.id ?? paymentId,
       );
     });

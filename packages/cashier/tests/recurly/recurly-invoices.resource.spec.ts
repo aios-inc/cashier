@@ -65,6 +65,7 @@ const EXPECTED_PLAN_LINE_ITEM = {
   proration: false,
   recurring: true,
   amountRefunded: 0,
+  metadata: {},
 };
 
 const EXPECTED_PRORATED_CREDIT_LINE_ITEM = {
@@ -80,6 +81,7 @@ const EXPECTED_PRORATED_CREDIT_LINE_ITEM = {
   proration: true,
   recurring: false,
   amountRefunded: 0,
+  metadata: {},
 };
 
 describe('RecurlyInvoicesResource', () => {
@@ -620,6 +622,27 @@ describe('RecurlyInvoicesResource', () => {
       });
     });
 
+    it('should map the custom fields of each line item as metadata', async () => {
+      client.getInvoice.mockResolvedValue({
+        ...RECURLY_FIXTURES.PAID_INVOICE,
+        lineItems: [
+          {
+            ...PLAN_LINE_ITEM,
+            customFields: [{ name: 'order', value: 'order-42' }],
+          },
+        ],
+        hasMoreLineItems: false,
+      });
+
+      const invoice = await invoices.get(RECURLY_FIXTURES.INVOICE_ID, {
+        with: ['lineItems'],
+      });
+
+      expect(invoice.lineItems).toEqual([
+        { ...EXPECTED_PLAN_LINE_ITEM, metadata: { order: 'order-42' } },
+      ]);
+    });
+
     it('should list every line item when the invoice has more than it returned', async () => {
       client.getInvoice.mockResolvedValue({
         ...RECURLY_FIXTURES.PAID_INVOICE,
@@ -879,6 +902,7 @@ describe('RecurlyInvoicesResource', () => {
       proration: false,
       recurring: true,
       amountRefunded: 0,
+      metadata: {},
     });
 
     it('should estimate the next renewal from the subscription without a change', async () => {
@@ -1129,10 +1153,12 @@ describe('RecurlyInvoicesResource', () => {
             amount: 2500,
             currency: 'USD',
             reason: null,
+            metadata: {},
             createdAt: new Date('2026-01-02T00:00:00Z'),
             provider: CashierProvider.Recurly,
           },
         ],
+        metadata: {},
         createdAt: new Date('2026-01-02T00:00:00Z'),
         provider: CashierProvider.Recurly,
       });

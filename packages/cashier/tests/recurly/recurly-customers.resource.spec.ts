@@ -367,6 +367,22 @@ describe('RecurlyCustomersResource', () => {
         provider: CashierProvider.Recurly,
       });
     });
+
+    it('should send the idempotency key as the Idempotency-Key header', async () => {
+      client.createLineItem.mockResolvedValue({ id: 'li_1', currency: 'USD' });
+
+      await customers.creditBalance(RECURLY_FIXTURES.ACCOUNT_ID, {
+        amount: 2500,
+        currency: 'USD',
+        idempotencyKey: 'order-42-credit',
+      });
+
+      expect(client.createLineItem).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.ACCOUNT_ID,
+        { type: 'credit', currency: 'USD', unitAmount: 25 },
+        { headers: { 'Idempotency-Key': 'order-42-credit' } },
+      );
+    });
   });
 
   describe('debitBalance', () => {
@@ -398,6 +414,22 @@ describe('RecurlyCustomersResource', () => {
         createdAt: new Date(0),
         provider: CashierProvider.Recurly,
       });
+    });
+
+    it('should send the idempotency key as the Idempotency-Key header', async () => {
+      client.createLineItem.mockResolvedValue({ id: 'li_2', currency: 'JPY' });
+
+      await customers.debitBalance(RECURLY_FIXTURES.ACCOUNT_ID, {
+        amount: 1000,
+        currency: 'JPY',
+        idempotencyKey: 'order-42-debit',
+      });
+
+      expect(client.createLineItem).toHaveBeenCalledWith(
+        RECURLY_FIXTURES.ACCOUNT_ID,
+        { type: 'charge', currency: 'JPY', unitAmount: 1000 },
+        { headers: { 'Idempotency-Key': 'order-42-debit' } },
+      );
     });
 
     it.each([

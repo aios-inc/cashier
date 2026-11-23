@@ -1,6 +1,7 @@
 import Stripe from 'stripe';
 import { CashierProvider } from '../../../types/cashier.types';
 import {
+  AddSubscriptionChargeParams,
   CancelSubscriptionParams,
   CreateSubscriptionParams,
   CursorPaginateSubscriptionsParams,
@@ -8,6 +9,7 @@ import {
   ListSubscriptionsParams,
   ProviderSubscriptionRelation,
   Subscription,
+  SubscriptionCharge,
   SubscriptionProduct,
   SubscriptionRefund,
   SubscriptionStatusFilter,
@@ -23,19 +25,26 @@ import {
   STRIPE_SUBSCRIPTION_RELATION_EXPAND,
   STRIPE_SUBSCRIPTION_STATUS_FILTERS,
 } from '../../../constants/cashier.constants';
+import { NotFoundError } from '../../../errors/not-found.error';
 import { ValidationError } from '../../../errors/validation.error';
+import { validateAddSubscriptionChargeParams } from '../../../utils/create-params.utils';
 import { resolveRelations } from '../../../utils/relations.utils';
+import { assertSubscriptionRenews } from '../../../utils/subscription-charge.utils';
 import {
   getStripeCancelAt,
   getStripeSubscriptionProductId,
   mapStripeSubscription,
 } from '../mappers/stripe-subscription.mapper';
+import { mapStripeSubscriptionCharge } from '../mappers/stripe-subscription-charge.mapper';
 import {
+  getExpandableId,
   getExpanded,
   toStripeCursorPaginator,
   toStripeExpand,
+  toStripeRequestOptions,
   toUnixSeconds,
 } from '../mappers/stripe-mapper.utils';
+import { readAllStripeItems } from '../stripe-list';
 import { stripeRequest } from '../stripe-request';
 import { getStripeSubscriptionItemId } from '../stripe-subscription-item';
 
@@ -68,6 +77,11 @@ const toStripeStatus = (
 const fail = (message: string): never => {
   throw new ValidationError(message, { provider: CashierProvider.Stripe });
 };
+
+const getStripeCustomerId = (subscription: Stripe.Subscription): string =>
+  typeof subscription.customer === 'string'
+    ? subscription.customer
+    : subscription.customer.id;
 
 const getUnusedPeriod = (
   subscription: Stripe.Subscription,
@@ -322,6 +336,93 @@ export class StripeSubscriptionsResource implements SubscriptionsResource<Cashie
           proration_behavior: 'none',
         }),
       );
+    });
+  }
+
+  addCharge(
+    subscriptionId: string,
+    params: AddSubscriptionChargeParams,
+  ): Promise<SubscriptionCharge> {
+    return stripeRequest(async () => {
+      validateAddSubscriptionChargeParams(params, CashierProvider.Stripe);
+
+      const {
+        description,
+        unitAmount,
+        quantity = 1,
+        metadata,
+        idempotencyKey,
+      } = params;
+      const subscription =
+        await this.client.subscriptions.retrieve(subscriptionId);
+
+      assertSubscriptionRenews(
+        mapStripeSubscription(subscription),
+        CashierProvider.Stripe,
+      );
+
+      return mapStripeSubscriptionCharge(
+        await this.client.invoiceItems.create(
+          {
+            customer: getStripeCustomerId(subscription),
+            subscription: subscription.id,
+            currency: subscription.currency,
+            unit_amount: unitAmount,
+            quantity,
+            description,
+            ...(metadata ? { metadata } : {}),
+          },
+          ...toStripeRequestOptions(idempotencyKey),
+        ),
+      );
+    });
+  }
+
+  listCharges(subscriptionId: string): Promise<SubscriptionCharge[]> {
+    return stripeRequest(async () => {
+      const subscription =
+        await this.client.subscriptions.retrieve(subscriptionId);
+      const listPendingInvoiceItems = (startingAfter?: string) =>
+        this.client.invoiceItems.list({
+          customer: getStripeCustomerId(subscription),
+          pending: true,
+          limit: DEFAULT_LIST_LIMIT,
+          ...(startingAfter ? { starting_after: startingAfter } : {}),
+        });
+      const invoiceItems = await readAllStripeItems(
+        await listPendingInvoiceItems(),
+        listPendingInvoiceItems,
+      );
+
+      return invoiceItems
+        .filter(
+          (invoiceItem) =>
+            getExpandableId(invoiceItem.subscription) === subscription.id,
+        )
+        .map(mapStripeSubscriptionCharge);
+    });
+  }
+
+  removeCharge(subscriptionId: string, chargeId: string): Promise<void> {
+    return stripeRequest(async () => {
+      const invoiceItem = await this.client.invoiceItems.retrieve(chargeId);
+
+      if (getExpandableId(invoiceItem.subscription) !== subscriptionId) {
+        throw new NotFoundError(
+          `Charge ${chargeId} does not belong to subscription ${subscriptionId}`,
+          { provider: CashierProvider.Stripe },
+        );
+      }
+
+      const invoiceId = getExpandableId(invoiceItem.invoice);
+
+      if (invoiceId) {
+        fail(
+          `Charge ${chargeId} is already on invoice ${invoiceId}, so it can no longer be removed`,
+        );
+      }
+
+      await this.client.invoiceItems.del(chargeId);
     });
   }
 

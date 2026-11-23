@@ -6,7 +6,7 @@ import {
   CustomerBalance,
 } from '../../../types/customer.types';
 import { toMinorUnits } from '../../../utils/money.utils';
-import { mapCustomFields } from './recurly-subscription.mapper';
+import { mapCustomFields } from './recurly-custom-fields.mapper';
 
 export const mapRecurlyAccount = (account: recurly.Account): Customer => ({
   id: account.id ?? '',

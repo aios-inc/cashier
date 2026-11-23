@@ -35,6 +35,9 @@ export const createStripeClientMock = () => ({
   },
   invoiceItems: {
     create: jest.fn(),
+    list: jest.fn(),
+    retrieve: jest.fn(),
+    del: jest.fn(),
   },
   paymentIntents: {
     list: jest.fn(),
