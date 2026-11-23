@@ -46,6 +46,7 @@ import {
   RECURLY_CODE_PREFIX,
   toRecurlyPlanReference,
 } from '../recurly-plan-reference';
+import { toRecurlyIdempotencyKey } from '../recurly-idempotency';
 import { createRecurlyLineItem } from '../recurly-line-item';
 import { readRecurlyItems, readRecurlyPage } from '../recurly-page';
 import { recurlyRequest } from '../recurly-request';
@@ -330,6 +331,9 @@ export class RecurlySubscriptionsResource implements SubscriptionsResource<Cashi
       assertSubscriptionRenews(
         mapRecurlySubscription(subscription),
         CashierProvider.Recurly,
+        Boolean(subscription.pausedAt) ||
+          (subscription.autoRenew === false &&
+            subscription.remainingBillingCycles === 0),
       );
 
       const currency = (subscription.currency ?? '').toUpperCase();
@@ -348,7 +352,7 @@ export class RecurlySubscriptionsResource implements SubscriptionsResource<Cashi
               ? { customFields: toRecurlyCustomFields(metadata) }
               : {}),
           },
-          idempotencyKey,
+          toRecurlyIdempotencyKey(idempotencyKey, 'subscription-charge'),
         ),
       );
     });

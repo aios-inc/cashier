@@ -141,7 +141,7 @@ Amounts are in minor units. `timeline` is oldest first. Each `InvoiceEvent` has 
 | `periodEnd`      | `Date \| null`           | End of the period the line covers.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `proration`      | `boolean`                | `true` for a proration. On Recurly, a line whose `proration_rate` is not 1.                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `recurring`      | `boolean`                | `true` for a line the subscription bills every period. `false` for a one-off item, such as an item added to the first invoice of a subscription. On Stripe, a line of type `subscription`. On Recurly, a line whose origin is `plan`, `plan_trial`, `add_on` or `add_on_trial`. `true` on a Recurly preview.                                                                                                                                                                                                                                          |
-| `metadata`       | `Record<string, string>` | Stripe: the line's metadata, which is the invoice item's metadata, or the subscription's metadata for a line of type `subscription`. Recurly: the line item's custom fields. Empty on a Recurly preview.                                                                                                                                                                                                                                                                                                                                              |
+| `metadata`       | `Record<string, string>` | Stripe: the line's metadata, which is the invoice item's metadata, or the subscription's current metadata for a line of type `subscription`, without the keys Cashier adds. Recurly: the line item's custom fields. Empty on a Recurly preview.                                                                                                                                                                                                                                                                                                       |
 | `amountRefunded` | `number`                 | What has been credited or refunded from the line, in minor units. `0` on a preview. On Stripe, the amounts of the line on post-payment credit notes that are not void, including credit notes that only credited the customer balance. On Recurly, the amounts of credit invoice lines whose `previous_line_item_id` is the line, on credit invoices that are not voided. A refund of the whole payment, such as [`payments.refund`](payments.md#paymentsrefundpaymentid-params) on Stripe, is not split across the lines, so it does not count here. |
 
 ## `invoices.create(params)`
@@ -335,17 +335,17 @@ An invoice that is not paid, a line that is not on the invoice, an amount above 
 
 ### The `InvoiceRefund` object
 
-| Field       | Type                      | Description                                                                                                                   |
-| ----------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `id`        | `string`                  | The Stripe credit note id, or the Recurly credit invoice id.                                                                  |
-| `invoiceId` | `string`                  | The refunded invoice.                                                                                                         |
-| `amount`    | `number`                  | The total refunded, in minor units.                                                                                           |
-| `currency`  | `string`                  | Uppercase ISO 4217 code.                                                                                                      |
-| `lineItems` | `InvoiceLineItemRefund[]` | Each refunded line, with its `lineItemId` and the `amount` taken from it.                                                     |
-| `refunds`   | `Refund[]`                | The refunds of the payment, as in [`payments.refund`](payments.md#the-refund-object).                                         |
-| `metadata`  | `Record<string, string>`  | Stripe: the credit note's metadata, without Cashier's `cashier_idempotency_key`. Recurly: the credit invoice's custom fields. |
-| `createdAt` | `Date`                    | When it was made.                                                                                                             |
-| `provider`  | `CashierProvider`         | The provider it came from.                                                                                                    |
+| Field       | Type                      | Description                                                                                                     |
+| ----------- | ------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `id`        | `string`                  | The Stripe credit note id, or the Recurly credit invoice id.                                                    |
+| `invoiceId` | `string`                  | The refunded invoice.                                                                                           |
+| `amount`    | `number`                  | The total refunded, in minor units.                                                                             |
+| `currency`  | `string`                  | Uppercase ISO 4217 code.                                                                                        |
+| `lineItems` | `InvoiceLineItemRefund[]` | Each refunded line, with its `lineItemId` and the `amount` taken from it.                                       |
+| `refunds`   | `Refund[]`                | The refunds of the payment, as in [`payments.refund`](payments.md#the-refund-object).                           |
+| `metadata`  | `Record<string, string>`  | Stripe: the credit note's metadata, without the keys Cashier adds. Recurly: the credit invoice's custom fields. |
+| `createdAt` | `Date`                    | When it was made.                                                                                               |
+| `provider`  | `CashierProvider`         | The provider it came from.                                                                                      |
 
 ## The `Invoice` object
 

@@ -53,6 +53,7 @@ Every method returns a promise. When it fails, it rejects with a subclass of `Ca
 - **Metadata** is a `Record<string, string>`. On Recurly it is read from and written to custom fields.
 - **Unknown states** from a provider are returned as `status: 'unknown'` instead of failing.
 - **`provider`** is set on every returned object, so you always know where it came from.
+- **Idempotency keys** make a retry with the same key return the first result instead of acting twice. Stripe remembers a key for 24 hours and rejects it with `ConflictError` when it comes back with different parameters. Recurly remembers it for 1 hour and matches only the key and the endpoint, not the parameters, so a key reused for another operation on the same endpoint returns the first result. Cashier appends the operation to the key for `customers.creditBalance`, `customers.debitBalance`, `subscriptions.addCharge` and `payments.refund` on Recurly. Use one key per operation, and retry within those windows.
 
 ## Recurly ids and codes
 

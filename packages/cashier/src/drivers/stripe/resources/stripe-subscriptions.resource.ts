@@ -22,6 +22,7 @@ import {
   DEFAULT_LIST_LIMIT,
   STRIPE_MAX_CANCELLATION_COMMENT_LENGTH,
   STRIPE_PRORATION_BEHAVIORS,
+  STRIPE_SUBSCRIPTION_CHARGE_METADATA_KEY,
   STRIPE_SUBSCRIPTION_RELATION_EXPAND,
   STRIPE_SUBSCRIPTION_STATUS_FILTERS,
 } from '../../../constants/cashier.constants';
@@ -82,6 +83,13 @@ const getStripeCustomerId = (subscription: Stripe.Subscription): string =>
   typeof subscription.customer === 'string'
     ? subscription.customer
     : subscription.customer.id;
+
+const isSubscriptionCharge = (
+  invoiceItem: Stripe.InvoiceItem,
+  subscriptionId: string,
+): boolean =>
+  getExpandableId(invoiceItem.subscription) === subscriptionId &&
+  invoiceItem.metadata?.[STRIPE_SUBSCRIPTION_CHARGE_METADATA_KEY] === 'true';
 
 const getUnusedPeriod = (
   subscription: Stripe.Subscription,
@@ -359,6 +367,7 @@ export class StripeSubscriptionsResource implements SubscriptionsResource<Cashie
       assertSubscriptionRenews(
         mapStripeSubscription(subscription),
         CashierProvider.Stripe,
+        subscription.pause_collection !== null,
       );
 
       return mapStripeSubscriptionCharge(
@@ -370,7 +379,11 @@ export class StripeSubscriptionsResource implements SubscriptionsResource<Cashie
             unit_amount: unitAmount,
             quantity,
             description,
-            ...(metadata ? { metadata } : {}),
+            discountable: false,
+            metadata: {
+              ...metadata,
+              [STRIPE_SUBSCRIPTION_CHARGE_METADATA_KEY]: 'true',
+            },
           },
           ...toStripeRequestOptions(idempotencyKey),
         ),
@@ -395,9 +408,8 @@ export class StripeSubscriptionsResource implements SubscriptionsResource<Cashie
       );
 
       return invoiceItems
-        .filter(
-          (invoiceItem) =>
-            getExpandableId(invoiceItem.subscription) === subscription.id,
+        .filter((invoiceItem) =>
+          isSubscriptionCharge(invoiceItem, subscription.id),
         )
         .map(mapStripeSubscriptionCharge);
     });
@@ -407,9 +419,9 @@ export class StripeSubscriptionsResource implements SubscriptionsResource<Cashie
     return stripeRequest(async () => {
       const invoiceItem = await this.client.invoiceItems.retrieve(chargeId);
 
-      if (getExpandableId(invoiceItem.subscription) !== subscriptionId) {
+      if (!isSubscriptionCharge(invoiceItem, subscriptionId)) {
         throw new NotFoundError(
-          `Charge ${chargeId} does not belong to subscription ${subscriptionId}`,
+          `Charge ${chargeId} is not a charge added to subscription ${subscriptionId}`,
           { provider: CashierProvider.Stripe },
         );
       }

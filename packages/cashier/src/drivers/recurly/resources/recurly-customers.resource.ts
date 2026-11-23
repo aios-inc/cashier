@@ -27,6 +27,7 @@ import {
 } from '../mappers/recurly-account.mapper';
 import { toRecurlyCustomFields } from '../mappers/recurly-custom-fields.mapper';
 import { getRecurlyBillingInfo } from '../recurly-billing-info';
+import { toRecurlyIdempotencyKey } from '../recurly-idempotency';
 import { createRecurlyLineItem } from '../recurly-line-item';
 import { readRecurlyItems } from '../recurly-page';
 import { recurlyRequest } from '../recurly-request';
@@ -201,7 +202,7 @@ export class RecurlyCustomersResource implements CustomersResource {
             unitAmount: toMajorUnits(params.amount, currency),
             ...(params.description ? { description: params.description } : {}),
           },
-          params.idempotencyKey,
+          toRecurlyIdempotencyKey(params.idempotencyKey, type),
         ),
       );
     });
