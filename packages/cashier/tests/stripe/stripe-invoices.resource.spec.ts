@@ -650,14 +650,17 @@ describe('StripeInvoicesResource', () => {
       ]);
     });
 
-    it('should map the metadata of each line item', async () => {
+    it('should map the metadata of each line item without the keys Cashier adds', async () => {
       const invoice = await getWith(
         {
           lines: {
             data: [
               createLine('il_addon', {
                 type: 'invoiceitem',
-                metadata: { order: 'order-42' },
+                metadata: {
+                  order: 'order-42',
+                  cashier_subscription_charge: 'true',
+                },
               }),
             ],
             has_more: false,

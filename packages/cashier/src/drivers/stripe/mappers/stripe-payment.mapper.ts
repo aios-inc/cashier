@@ -68,7 +68,7 @@ const mapStripePaymentStatus = (
   return STRIPE_PAYMENT_STATUSES[paymentIntent.status] ?? 'unknown';
 };
 
-const mapStripeNextAction = (
+export const mapStripeNextAction = (
   paymentIntent: Stripe.PaymentIntent,
 ): PaymentNextAction | null =>
   paymentIntent.status === 'requires_action' && paymentIntent.client_secret
@@ -186,7 +186,7 @@ export const mapStripePayment = (
     currency: paymentIntent.currency.toUpperCase(),
     description: paymentIntent.description,
     metadata: paymentIntent.metadata ?? {},
-    nextAction: mapStripeNextAction(paymentIntent),
+    nextAction: null,
     createdAt: new Date(paymentIntent.created * 1000),
     provider: CashierProvider.Stripe,
     ...(relations.has('refunds')

@@ -1,7 +1,7 @@
 import Stripe from 'stripe';
 import { CashierProvider } from '../../../types/cashier.types';
 import { SubscriptionCharge } from '../../../types/subscription.types';
-import { getExpandableId } from './stripe-mapper.utils';
+import { getExpandableId, withoutCashierMetadata } from './stripe-mapper.utils';
 
 export const mapStripeSubscriptionCharge = (
   invoiceItem: Stripe.InvoiceItem,
@@ -14,7 +14,7 @@ export const mapStripeSubscriptionCharge = (
   quantity: invoiceItem.quantity,
   amount: invoiceItem.amount,
   currency: invoiceItem.currency.toUpperCase(),
-  metadata: invoiceItem.metadata ?? {},
+  metadata: withoutCashierMetadata(invoiceItem.metadata),
   createdAt: new Date(invoiceItem.date * 1000),
   provider: CashierProvider.Stripe,
 });

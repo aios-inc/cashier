@@ -472,6 +472,17 @@ describe('StripePaymentsResource', () => {
       });
     });
 
+    it('should leave the client secret out when the payment is read again', async () => {
+      client.paymentIntents.retrieve.mockResolvedValue(
+        STRIPE_FIXTURES.PAYMENT_INTENTS[2],
+      );
+
+      const payment = await payments.get('pi_789');
+
+      expect(payment.status).toBe('incomplete');
+      expect(payment.nextAction).toBeNull();
+    });
+
     it('should not return the client secret of a payment that needs no action', async () => {
       client.paymentIntents.create.mockResolvedValue({
         ...STRIPE_FIXTURES.SUCCEEDED_PAYMENT_INTENT,

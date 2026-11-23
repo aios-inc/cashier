@@ -70,10 +70,10 @@ transaction.amount; // -2500
 
 An `amount` that is not a positive integer, or a missing `currency`, rejects with `ValidationError` before any request.
 
-| Provider | Behavior                                                                                                                                                                                         |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Stripe   | Creates a customer balance transaction with a negative `amount`. `idempotencyKey` is sent unchanged.                                                                                             |
-| Recurly  | Creates a pending `credit` line item on the account, with the amount in major units. Recurly applies it to the account's next invoice. `idempotencyKey` is sent as the `Idempotency-Key` header. |
+| Provider | Behavior                                                                                                                                                                                                                 |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Stripe   | Creates a customer balance transaction with a negative `amount`. `idempotencyKey` is sent unchanged.                                                                                                                     |
+| Recurly  | Creates a pending `credit` line item on the account, with the amount in major units. Recurly applies it to the account's next invoice. `idempotencyKey` is sent with `-credit` appended as the `Idempotency-Key` header. |
 
 ## `customers.debitBalance(customerId, params)`
 
@@ -87,10 +87,10 @@ await driver.customers.debitBalance('cus_123', {
 });
 ```
 
-| Provider | Behavior                                                                                                       |
-| -------- | -------------------------------------------------------------------------------------------------------------- |
-| Stripe   | Creates a customer balance transaction with a positive `amount`. `idempotencyKey` is sent unchanged.           |
-| Recurly  | Creates a pending `charge` line item on the account. `idempotencyKey` is sent as the `Idempotency-Key` header. |
+| Provider | Behavior                                                                                                                               |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Stripe   | Creates a customer balance transaction with a positive `amount`. `idempotencyKey` is sent unchanged.                                   |
+| Recurly  | Creates a pending `charge` line item on the account. `idempotencyKey` is sent with `-charge` appended as the `Idempotency-Key` header. |
 
 To bill something with a subscription's next renewal as its own line on the invoice, use [`subscriptions.addCharge`](subscriptions.md#subscriptionsaddchargesubscriptionid-params) instead.
 

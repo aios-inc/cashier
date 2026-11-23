@@ -30,6 +30,7 @@ import {
 } from '../mappers/recurly-payment.mapper';
 import { mapRecurlyRefund } from '../mappers/recurly-refund.mapper';
 import { readRecurlyItems, readRecurlyPage } from '../recurly-page';
+import { toRecurlyIdempotencyKey } from '../recurly-idempotency';
 import {
   createRecurlyPurchase,
   toRecurlyPurchaseLineItem,
@@ -194,6 +195,10 @@ export class RecurlyPaymentsResource implements PaymentsResource<CashierProvider
 
       const currency = (transaction.currency ?? '').toUpperCase();
       const refunds = this.client as unknown as RecurlyRefundClient;
+      const recurlyIdempotencyKey = toRecurlyIdempotencyKey(
+        idempotencyKey,
+        'payment-refund',
+      );
       const body: recurly.InvoiceRefund = {
         type: 'amount',
         ...(amount === undefined
@@ -202,9 +207,9 @@ export class RecurlyPaymentsResource implements PaymentsResource<CashierProvider
       };
 
       return mapRecurlyRefund(
-        idempotencyKey
+        recurlyIdempotencyKey
           ? await refunds.refundInvoice(invoiceId, body, {
-              headers: { 'Idempotency-Key': idempotencyKey },
+              headers: { 'Idempotency-Key': recurlyIdempotencyKey },
             })
           : await refunds.refundInvoice(invoiceId, body),
         transaction.id ?? paymentId,

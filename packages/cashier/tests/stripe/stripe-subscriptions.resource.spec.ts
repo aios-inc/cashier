@@ -1231,7 +1231,7 @@ describe('StripeSubscriptionsResource', () => {
 
   describe('addCharge', () => {
     const PARAMS = {
-      description: 'Needles x10',
+      description: 'Starter kit',
       unitAmount: 1250,
       metadata: { order: 'order-42' },
     };
@@ -1240,12 +1240,12 @@ describe('StripeSubscriptionsResource', () => {
       customer: STRIPE_FIXTURES.CUSTOMER_ID,
       subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID,
       invoice: null,
-      description: 'Needles x10',
+      description: 'Starter kit',
       unit_amount: 1250,
       quantity: 2,
       amount: 2500,
       currency: 'usd',
-      metadata: { order: 'order-42' },
+      metadata: { order: 'order-42', cashier_subscription_charge: 'true' },
       date: 1767225600,
     };
 
@@ -1271,14 +1271,15 @@ describe('StripeSubscriptionsResource', () => {
         currency: 'usd',
         unit_amount: 1250,
         quantity: 2,
-        description: 'Needles x10',
-        metadata: { order: 'order-42' },
+        description: 'Starter kit',
+        discountable: false,
+        metadata: { order: 'order-42', cashier_subscription_charge: 'true' },
       });
       expect(charge).toEqual({
         id: 'ii_123',
         customerId: STRIPE_FIXTURES.CUSTOMER_ID,
         subscriptionId: STRIPE_FIXTURES.SUBSCRIPTION_ID,
-        description: 'Needles x10',
+        description: 'Starter kit',
         unitAmount: 1250,
         quantity: 2,
         amount: 2500,
@@ -1289,9 +1290,9 @@ describe('StripeSubscriptionsResource', () => {
       });
     });
 
-    it('should default the quantity to 1 and leave out missing metadata', async () => {
+    it('should default the quantity to 1 and only mark the charge without metadata', async () => {
       await subscriptions.addCharge(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
-        description: 'Needles x10',
+        description: 'Starter kit',
         unitAmount: 1250,
       });
 
@@ -1301,19 +1302,21 @@ describe('StripeSubscriptionsResource', () => {
         currency: 'usd',
         unit_amount: 1250,
         quantity: 1,
-        description: 'Needles x10',
+        description: 'Starter kit',
+        discountable: false,
+        metadata: { cashier_subscription_charge: 'true' },
       });
     });
 
     it('should pass the idempotency key as is', async () => {
       await subscriptions.addCharge(STRIPE_FIXTURES.SUBSCRIPTION_ID, {
         ...PARAMS,
-        idempotencyKey: 'order-42-needles',
+        idempotencyKey: 'order-42',
       });
 
       expect(client.invoiceItems.create).toHaveBeenCalledWith(
         expect.any(Object),
-        { idempotencyKey: 'order-42-needles' },
+        { idempotencyKey: 'order-42' },
       );
     });
 
@@ -1333,6 +1336,14 @@ describe('StripeSubscriptionsResource', () => {
       ['canceled', { status: 'canceled' }],
       ['incomplete', { status: 'incomplete' }],
       ['set to cancel at period end', { cancel_at_period_end: true }],
+      [
+        'paused with its invoices voided',
+        { pause_collection: { behavior: 'void', resumes_at: null } },
+      ],
+      [
+        'paused with its invoices kept as drafts',
+        { pause_collection: { behavior: 'keep_as_draft', resumes_at: null } },
+      ],
       [
         'set to cancel before its next renewal',
         { cancel_at: STRIPE_FIXTURES.SUBSCRIPTION.current_period_end },
@@ -1374,7 +1385,13 @@ describe('StripeSubscriptionsResource', () => {
   });
 
   describe('listCharges', () => {
-    const createInvoiceItem = (id: string, subscription: string | null) => ({
+    const createInvoiceItem = (
+      id: string,
+      subscription: string | null,
+      metadata: Record<string, string> = {
+        cashier_subscription_charge: 'true',
+      },
+    ) => ({
       id,
       customer: STRIPE_FIXTURES.CUSTOMER_ID,
       subscription,
@@ -1384,7 +1401,7 @@ describe('StripeSubscriptionsResource', () => {
       quantity: 1,
       amount: 1000,
       currency: 'usd',
-      metadata: {},
+      metadata,
       date: 1767225600,
     });
 
@@ -1394,12 +1411,17 @@ describe('StripeSubscriptionsResource', () => {
       );
     });
 
-    it("should list the customer's pending invoice items and keep the subscription's", async () => {
+    it("should list the customer's pending invoice items and keep the charges added to the subscription", async () => {
       client.invoiceItems.list
         .mockResolvedValueOnce({
           data: [
             createInvoiceItem('ii_1', STRIPE_FIXTURES.SUBSCRIPTION_ID),
             createInvoiceItem('ii_2', 'sub_other'),
+            createInvoiceItem(
+              'ii_proration',
+              STRIPE_FIXTURES.SUBSCRIPTION_ID,
+              {},
+            ),
           ],
           has_more: true,
         })
@@ -1424,9 +1446,10 @@ describe('StripeSubscriptionsResource', () => {
         customer: STRIPE_FIXTURES.CUSTOMER_ID,
         pending: true,
         limit: 100,
-        starting_after: 'ii_2',
+        starting_after: 'ii_proration',
       });
       expect(charges.map((charge) => charge.id)).toEqual(['ii_1', 'ii_4']);
+      expect(charges[0]?.metadata).toEqual({});
     });
   });
 
@@ -1435,6 +1458,7 @@ describe('StripeSubscriptionsResource', () => {
       id: 'ii_123',
       subscription: STRIPE_FIXTURES.SUBSCRIPTION_ID,
       invoice: null,
+      metadata: { cashier_subscription_charge: 'true' },
     };
 
     it('should delete a pending invoice item of the subscription', async () => {
@@ -1461,6 +1485,18 @@ describe('StripeSubscriptionsResource', () => {
         constructor: NotFoundError,
         provider: CashierProvider.Stripe,
       });
+      expect(client.invoiceItems.del).not.toHaveBeenCalled();
+    });
+
+    it('should reject an invoice item that addCharge did not create, such as a proration, with NotFoundError', async () => {
+      client.invoiceItems.retrieve.mockResolvedValue({
+        ...INVOICE_ITEM,
+        metadata: {},
+      });
+
+      await expect(
+        subscriptions.removeCharge(STRIPE_FIXTURES.SUBSCRIPTION_ID, 'ii_123'),
+      ).rejects.toBeInstanceOf(NotFoundError);
       expect(client.invoiceItems.del).not.toHaveBeenCalled();
     });
 

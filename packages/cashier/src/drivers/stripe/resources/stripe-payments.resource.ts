@@ -22,7 +22,10 @@ import {
 } from '../../../constants/cashier.constants';
 import { validateCreatePaymentParams } from '../../../utils/create-params.utils';
 import { resolveRelations } from '../../../utils/relations.utils';
-import { mapStripePayment } from '../mappers/stripe-payment.mapper';
+import {
+  mapStripeNextAction,
+  mapStripePayment,
+} from '../mappers/stripe-payment.mapper';
 import { mapStripeRefund } from '../mappers/stripe-refund.mapper';
 import {
   toStripeCursorPaginator,
@@ -111,22 +114,25 @@ export class StripePaymentsResource implements PaymentsResource<CashierProvider.
         idempotencyKey,
       } = params;
 
-      return mapStripePayment(
-        await this.client.paymentIntents.create(
-          {
-            amount,
-            currency: currency.toLowerCase(),
-            customer,
-            payment_method: paymentMethod,
-            payment_method_types: STRIPE_OFF_SESSION_PAYMENT_METHOD_TYPES,
-            confirm: true,
-            ...(onSession ? { use_stripe_sdk: true } : { off_session: true }),
-            ...(description ? { description } : {}),
-            ...(metadata ? { metadata } : {}),
-          },
-          ...toStripeRequestOptions(idempotencyKey),
-        ),
+      const paymentIntent = await this.client.paymentIntents.create(
+        {
+          amount,
+          currency: currency.toLowerCase(),
+          customer,
+          payment_method: paymentMethod,
+          payment_method_types: STRIPE_OFF_SESSION_PAYMENT_METHOD_TYPES,
+          confirm: true,
+          ...(onSession ? { use_stripe_sdk: true } : { off_session: true }),
+          ...(description ? { description } : {}),
+          ...(metadata ? { metadata } : {}),
+        },
+        ...toStripeRequestOptions(idempotencyKey),
       );
+
+      return {
+        ...mapStripePayment(paymentIntent),
+        nextAction: mapStripeNextAction(paymentIntent),
+      };
     });
   }
 

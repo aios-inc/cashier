@@ -1248,7 +1248,7 @@ describe('RecurlySubscriptionsResource', () => {
 
   describe('addCharge', () => {
     const PARAMS = {
-      description: 'Needles x10',
+      description: 'Starter kit',
       unitAmount: 1250,
       metadata: { order: 'order-42' },
     };
@@ -1258,7 +1258,7 @@ describe('RecurlySubscriptionsResource', () => {
       subscriptionId: null,
       type: 'charge',
       state: 'pending',
-      description: 'Needles x10',
+      description: 'Starter kit',
       unitAmount: 12.5,
       quantity: 2,
       subtotal: 25,
@@ -1291,7 +1291,7 @@ describe('RecurlySubscriptionsResource', () => {
           currency: 'USD',
           unitAmount: 12.5,
           quantity: 2,
-          description: 'Needles x10',
+          description: 'Starter kit',
           customFields: [{ name: 'order', value: 'order-42' }],
         },
       );
@@ -1299,7 +1299,7 @@ describe('RecurlySubscriptionsResource', () => {
         id: 'li_charge_1',
         customerId: RECURLY_FIXTURES.ACCOUNT_ID,
         subscriptionId: null,
-        description: 'Needles x10',
+        description: 'Starter kit',
         unitAmount: 1250,
         quantity: 2,
         amount: 2500,
@@ -1312,7 +1312,7 @@ describe('RecurlySubscriptionsResource', () => {
 
     it('should default the quantity to 1 and leave out missing metadata', async () => {
       await subscriptions.addCharge(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
-        description: 'Needles x10',
+        description: 'Starter kit',
         unitAmount: 1250,
       });
 
@@ -1323,7 +1323,7 @@ describe('RecurlySubscriptionsResource', () => {
           currency: 'USD',
           unitAmount: 12.5,
           quantity: 1,
-          description: 'Needles x10',
+          description: 'Starter kit',
         },
       );
     });
@@ -1331,24 +1331,43 @@ describe('RecurlySubscriptionsResource', () => {
     it('should send the idempotency key as the Idempotency-Key header', async () => {
       await subscriptions.addCharge(RECURLY_FIXTURES.SUBSCRIPTION_ID, {
         ...PARAMS,
-        idempotencyKey: 'order-42-needles',
+        idempotencyKey: 'order-42',
       });
 
       expect(client.createLineItem).toHaveBeenCalledWith(
         RECURLY_FIXTURES.ACCOUNT_ID,
         expect.any(Object),
-        { headers: { 'Idempotency-Key': 'order-42-needles' } },
+        { headers: { 'Idempotency-Key': 'order-42-subscription-charge' } },
       );
     });
 
     it.each([
-      ['canceled at the end of its period', 'CANCELED_SUBSCRIPTION'],
-      ['expired', 'EXPIRED_SUBSCRIPTION'],
-      ['paused', 'PAUSED_DISCOUNTED_SUBSCRIPTION'],
-    ] as const)(
+      [
+        'canceled at the end of its period',
+        RECURLY_FIXTURES.CANCELED_SUBSCRIPTION,
+      ],
+      ['expired', RECURLY_FIXTURES.EXPIRED_SUBSCRIPTION],
+      ['paused', RECURLY_FIXTURES.PAUSED_DISCOUNTED_SUBSCRIPTION],
+      [
+        'active but set to pause at the end of its period',
+        {
+          ...RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+          pausedAt: new Date('2026-02-01T00:00:00Z'),
+          remainingPauseCycles: 1,
+        },
+      ],
+      [
+        'in the last cycle of a term that does not renew',
+        {
+          ...RECURLY_FIXTURES.ACTIVE_SUBSCRIPTION,
+          autoRenew: false,
+          remainingBillingCycles: 0,
+        },
+      ],
+    ])(
       'should reject a subscription that is %s without adding the charge',
-      async (_case, fixture) => {
-        client.getSubscription.mockResolvedValue(RECURLY_FIXTURES[fixture]);
+      async (_case, subscription) => {
+        client.getSubscription.mockResolvedValue(subscription);
 
         await expect(
           subscriptions.addCharge(RECURLY_FIXTURES.SUBSCRIPTION_ID, PARAMS),

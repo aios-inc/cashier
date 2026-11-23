@@ -445,7 +445,7 @@ describe('RecurlyPaymentsResource', () => {
       expect(refund).toEqual(RECURLY_FIXTURES.EXPECTED_REFUND);
     });
 
-    it('should send the idempotency key as the Idempotency-Key header', async () => {
+    it('should send the idempotency key with the operation as the Idempotency-Key header', async () => {
       await payments.refund(RECURLY_FIXTURES.PAYMENT_ID, {
         amount: 4050,
         idempotencyKey: 'refund-42',
@@ -454,7 +454,7 @@ describe('RecurlyPaymentsResource', () => {
       expect(client.refundInvoice).toHaveBeenCalledWith(
         RECURLY_FIXTURES.INVOICE_ID,
         { type: 'amount', amount: 40.5 },
-        { headers: { 'Idempotency-Key': 'refund-42' } },
+        { headers: { 'Idempotency-Key': 'refund-42-payment-refund' } },
       );
     });
 

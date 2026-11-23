@@ -1,4 +1,5 @@
 import Stripe from 'stripe';
+import { STRIPE_CASHIER_METADATA_KEYS } from '../../../constants/cashier.constants';
 import { CursorPaginator } from '../../../types/pagination.types';
 import { BillingInterval } from '../../../types/price.types';
 
@@ -20,6 +21,15 @@ export const fromUnixSeconds = (
 
 export const toUnixSeconds = (date: Date): number =>
   Math.floor(date.getTime() / 1000);
+
+export const withoutCashierMetadata = (
+  metadata: Stripe.Metadata | null | undefined,
+): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(metadata ?? {}).filter(
+      ([key]) => !STRIPE_CASHIER_METADATA_KEYS.has(key),
+    ),
+  );
 
 export const toStripeRequestOptions = (
   idempotencyKey: string | undefined,

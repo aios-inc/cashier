@@ -368,13 +368,13 @@ describe('RecurlyCustomersResource', () => {
       });
     });
 
-    it('should send the idempotency key as the Idempotency-Key header', async () => {
+    it('should send the idempotency key with the operation as the Idempotency-Key header', async () => {
       client.createLineItem.mockResolvedValue({ id: 'li_1', currency: 'USD' });
 
       await customers.creditBalance(RECURLY_FIXTURES.ACCOUNT_ID, {
         amount: 2500,
         currency: 'USD',
-        idempotencyKey: 'order-42-credit',
+        idempotencyKey: 'order-42',
       });
 
       expect(client.createLineItem).toHaveBeenCalledWith(
@@ -416,19 +416,19 @@ describe('RecurlyCustomersResource', () => {
       });
     });
 
-    it('should send the idempotency key as the Idempotency-Key header', async () => {
+    it('should send the idempotency key with the operation as the Idempotency-Key header', async () => {
       client.createLineItem.mockResolvedValue({ id: 'li_2', currency: 'JPY' });
 
       await customers.debitBalance(RECURLY_FIXTURES.ACCOUNT_ID, {
         amount: 1000,
         currency: 'JPY',
-        idempotencyKey: 'order-42-debit',
+        idempotencyKey: 'order-42',
       });
 
       expect(client.createLineItem).toHaveBeenCalledWith(
         RECURLY_FIXTURES.ACCOUNT_ID,
         { type: 'charge', currency: 'JPY', unitAmount: 1000 },
-        { headers: { 'Idempotency-Key': 'order-42-debit' } },
+        { headers: { 'Idempotency-Key': 'order-42-charge' } },
       );
     });
 

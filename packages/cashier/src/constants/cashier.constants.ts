@@ -73,6 +73,14 @@ export const RECURLY_RECURRING_LINE_ITEM_ORIGINS: ReadonlySet<string> = new Set(
 
 export const STRIPE_IDEMPOTENCY_METADATA_KEY = 'cashier_idempotency_key';
 
+export const STRIPE_SUBSCRIPTION_CHARGE_METADATA_KEY =
+  'cashier_subscription_charge';
+
+export const STRIPE_CASHIER_METADATA_KEYS: ReadonlySet<string> = new Set([
+  STRIPE_IDEMPOTENCY_METADATA_KEY,
+  STRIPE_SUBSCRIPTION_CHARGE_METADATA_KEY,
+]);
+
 export const STRIPE_INVOICE_RELATION_EXPAND: Record<
   CashierInvoiceRelations['stripe'],
   string[]

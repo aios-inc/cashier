@@ -23,13 +23,15 @@ const endsBeforeRenewal = ({
 export const assertSubscriptionRenews = (
   subscription: Subscription,
   provider: CashierProvider,
+  skipsNextRenewal: boolean,
 ): void => {
   if (
+    skipsNextRenewal ||
     !RENEWING_STATUSES.has(subscription.status) ||
     endsBeforeRenewal(subscription)
   ) {
     throw new SubscriptionError(
-      `Subscription ${subscription.id} does not renew, so a charge for its next renewal would never be billed`,
+      `Subscription ${subscription.id} does not renew or its next renewal is not collected, so a charge for it would never be paid`,
       { provider },
     );
   }
